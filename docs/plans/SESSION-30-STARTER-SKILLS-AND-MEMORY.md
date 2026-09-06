@@ -732,14 +732,25 @@ the guard that the compaction nudge and the skill library agree.
   manifest is the only thing the model matches on, and a skill with no description is
   seeded, listed in the panel, and invisible to the agent.
 
-### packages/shared/src/apps/manager.test.ts
+### packages/shared/src/apps/templates.test.ts
 
-- `createApp` writes `AGENTS.md` with `{{APP_NAME}}` substituted.
-- `createApp` writes `memory/INDEX.md`.
-- The seeded `.gitignore` contains `memory/`.
-- After `initGitRepo`, `git.statusMatrix` reports nothing under `memory/` — the assertion
-  that actually proves the rollback property, rather than asserting the string is in a
-  file.
+`createApp` itself cannot be exercised in a test: `APPS_DIR` is resolved from `homedir()`
+at module load, and bun shares the module registry across test files in a process, so
+redirecting `HOME` in a `beforeEach` does not reach it — a first attempt proved that, and
+only a guard asserting `getAppsDir()` was inside the temp directory stopped it writing
+into the real `~/.keylimepi/apps`. Everything reachable with an explicit path is covered
+instead, which is everything that matters:
+
+- `applyTemplateVars` substitutes all three placeholders, and `DEFAULT_AGENTS_MD` renders
+  with no `{{` left in it — a literal placeholder in a file sent with every request is a
+  silent defect, not a failure.
+- `DEFAULT_AGENTS_MD` names `memory/INDEX.md` and `memory/task.md`, the two paths the
+  compaction notice sends the model to. Nothing else checks the two agree.
+- `DEFAULT_MEMORY_INDEX`'s example line is commented out — an uncommented one would be an
+  index entry for a file that does not exist.
+- Through the real `initGitRepo`: `AGENTS.md` is tracked, nothing under `memory/` is, and
+  `statusMatrix` is clean. That is the assertion that proves the rollback property, rather
+  than asserting a string is in a file.
 
 ### apps/electron/src/main/migrate-workspace.test.ts
 

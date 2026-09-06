@@ -17,6 +17,13 @@ import type { AppTemplate, AppTemplateConfig } from '@keylimepi/core'
  * scaffolded before there was a default at all, so anything it must cover belongs here
  * rather than in a second, divergent copy of the list.
  *
+ * `memory/` is the agent's durable notes, and ignoring it is the whole reason the
+ * directory works. `initGitRepo` adds every file, so without this entry every note the
+ * agent writes would be tracked and auto-committed — and `rollback` is a `git checkout`,
+ * which would then revert the note explaining the failure being rolled back, at exactly
+ * the moment it was worth having. Ignored *and untracked*, it survives instead, and
+ * costs nothing in `git_status` or the changed-files strip.
+ *
  * A template may still ship its own `.gitignore`; this is only the default.
  */
 export const DEFAULT_GITIGNORE = `# Dependencies
@@ -42,12 +49,76 @@ yarn-debug.log*
 # Key Lime Pi runtime state
 .chat-sessions.json
 .chat-history/
+memory/
 
 # Editor and OS
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+`
+
+/**
+ * The `AGENTS.md` every new sub-app is seeded with.
+ *
+ * Pi loads this file into every request, so it is the one place a fact about the app is
+ * guaranteed to be in front of the model without a tool call. No template has ever
+ * written one, which meant the only thing the agent knew about an app was its source.
+ *
+ * It is deliberately about the *app*, not about method. The method lives in the system
+ * prompt and in the `plan`, `implement` and `remember` skills, and restating it here
+ * would charge every request twice for the same instruction. What belongs here is what
+ * only this app can say.
+ *
+ * It is also agent-writable under `acceptEdits` and paid for on every request, so the
+ * file says so about itself. An `AGENTS.md` that grows unnoticed is a permanent tax on
+ * the context window, visible in the context meter's `context-files` block and nowhere
+ * else.
+ */
+export const DEFAULT_AGENTS_MD = `# {{APP_NAME}}
+
+{{APP_DESCRIPTION}}
+
+## Running It
+
+<!-- Fill this in once you know: the command, the port, anything that has to be running
+     first. Read it from package.json rather than guessing. -->
+
+## Conventions
+
+<!-- Record the decisions this app has made that its source does not state outright. -->
+
+## Memory
+
+Durable notes live in \`memory/\`. \`memory/INDEX.md\` has one line per note saying when
+that note matters — read it before starting work and open only what applies. The plan for
+the task in progress is \`memory/task.md\`. Load the \`remember\` skill for the format.
+
+\`memory/\` is not committed, so it survives a rollback of the code.
+
+---
+
+Keep this file short — it is sent with every request. Anything longer than a screen
+belongs in a memory note or a skill, not here.
+`
+
+/**
+ * The starting `memory/INDEX.md`.
+ *
+ * Seeded rather than left for the agent to create, because an empty directory is
+ * indistinguishable from a missing feature: a model told to read `memory/INDEX.md` and
+ * handed a failed `read` learns that memory does not work in this app. A file that
+ * exists and says it is empty teaches the format instead.
+ *
+ * The example line is commented out. An uncommented one would be a note about a file
+ * that does not exist, which is the one thing an index must never contain.
+ */
+export const DEFAULT_MEMORY_INDEX = `# Memory Index
+
+One line per note: the file name, then when that note matters. Read this before starting
+work and open only the notes that apply.
+
+<!-- - api-shape.md — the /api/items response fields, and which are optional -->
 `
 
 /**
@@ -444,4 +515,36 @@ This is a blank project. Add your files here!`
       }
     ]
   }
+}
+
+/**
+ * The values a template's placeholders are replaced with.
+ */
+export interface TemplateVars {
+  /** The app's display name. */
+  name: string
+  /** The app's description, or an empty string. */
+  description: string
+  /** The app's id. */
+  id: string
+}
+
+/**
+ * Substitute a template's placeholders.
+ *
+ * Lifted out of `createApp`'s template-file loop because two other callers render the
+ * same placeholders: the `AGENTS.md` seeded beside them, and the backfill in
+ * `migrate-workspace.ts` that gives an existing app the one it was scaffolded without.
+ * A second, divergent copy of the replacement chain is how one of them silently stops
+ * substituting — leaving a literal `{{APP_NAME}}` in a file that goes into every request.
+ *
+ * @param content - The template text
+ * @param vars - The app's name, description and id
+ * @returns The text with every placeholder replaced
+ */
+export function applyTemplateVars(content: string, vars: TemplateVars): string {
+  return content
+    .replace(/\{\{APP_NAME\}\}/g, vars.name)
+    .replace(/\{\{APP_DESCRIPTION\}\}/g, vars.description)
+    .replace(/\{\{APP_ID\}\}/g, vars.id)
 }

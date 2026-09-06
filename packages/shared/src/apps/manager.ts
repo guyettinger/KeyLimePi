@@ -4,7 +4,14 @@ import { homedir } from 'node:os'
 import * as git from 'isomorphic-git'
 import fs from 'node:fs'
 import type { SubApp, AppMetadata, CreateAppParams } from '@keylimepi/core'
-import { DEFAULT_GITIGNORE, getTemplate } from './templates.js'
+import {
+  applyTemplateVars,
+  DEFAULT_AGENTS_MD,
+  DEFAULT_GITIGNORE,
+  DEFAULT_MEMORY_INDEX,
+  getTemplate,
+  type TemplateVars
+} from './templates.js'
 import { COMMIT_AUTHOR } from '../versions/manager.js'
 
 const APPS_DIR = join(homedir(), '.keylimepi', 'apps')
@@ -195,11 +202,27 @@ export class AppManager {
     // Get template config
     const template = getTemplate(params.template)
 
+    const vars: TemplateVars = { name: params.name, description: params.description ?? '', id }
+
     // Seed .gitignore before the template's own files, so a template that ships one
     // overwrites this default rather than being overwritten by it.
     if (!template.files.some((file) => file.path === '.gitignore')) {
       await writeFile(join(appPath, '.gitignore'), DEFAULT_GITIGNORE)
     }
+
+    // Same ordering, same reason: a template that ships its own `AGENTS.md` knows more
+    // about its app than this default does.
+    if (!template.files.some((file) => file.path === 'AGENTS.md')) {
+      await writeFile(join(appPath, 'AGENTS.md'), applyTemplateVars(DEFAULT_AGENTS_MD, vars))
+    }
+
+    // `memory/` is in DEFAULT_GITIGNORE, so `initGitRepo` below will not add it. That is
+    // what keeps a rollback of the code from deleting the notes explaining the failure
+    // being rolled back. The index is written rather than left for the agent: a model
+    // told to read `memory/INDEX.md` and handed a failed `read` learns that memory does
+    // not work here.
+    await mkdir(join(appPath, 'memory'), { recursive: true })
+    await writeFile(join(appPath, 'memory', 'INDEX.md'), DEFAULT_MEMORY_INDEX)
 
     // Create files from template
     for (const file of template.files) {
@@ -207,13 +230,7 @@ export class AppManager {
       const fileDir = join(filePath, '..')
       await mkdir(fileDir, { recursive: true })
 
-      // Replace template variables
-      const content = file.content
-        .replace(/\{\{APP_NAME\}\}/g, params.name)
-        .replace(/\{\{APP_DESCRIPTION\}\}/g, params.description ?? '')
-        .replace(/\{\{APP_ID\}\}/g, id)
-
-      await writeFile(filePath, content)
+      await writeFile(filePath, applyTemplateVars(file.content, vars))
     }
 
     // Create package.json if template has dependencies/scripts
