@@ -728,9 +728,17 @@ the guard that the compaction nudge and the skill library agree.
   `memory/task.md`. (This is the drift guard the `NOTES.md` assertions used to be.)
 - An untouched `working-notes` is removed.
 - An edited `working-notes` is left on disk and reported by `isSupersededSeed` as false.
-- Every entry in `SEED_SKILLS` parses to a non-empty single-line description — the
-  manifest is the only thing the model matches on, and a skill with no description is
-  seeded, listed in the panel, and invisible to the agent.
+- Every entry in `SEED_SKILLS` has a description that is **one line**, a name
+  `isValidSkillName` accepts, and a rendered manifest entry within 100 tokens.
+
+  The first is not a style rule. `parseSkillFrontmatter` matches `description:\s*(.+)`
+  and `.` does not match a newline, so a wrapped description silently loses everything
+  after the first line — confirmed against the real loader, which reads a two-line
+  description back as one with no error. The description is the only text the model
+  matches a skill on, so half of one is a skill that never triggers for the reason it was
+  written. The 100-token cap is progressive disclosure's always-loaded-tier budget,
+  measured on the rendered XML rather than the description alone; the worst seed shipped
+  is 74.
 
 ### packages/shared/src/apps/templates.test.ts
 

@@ -13,7 +13,9 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { SEED_SKILLS } from './seed-content.js'
 import { seedSkills } from './seed.js'
 import { SUPERSEDED_SEEDS, isSupersededSeed } from './superseded-seeds.js'
-import { parseSkillBody } from './loader.js'
+import { isValidSkillName, parseSkillBody } from './loader.js'
+import { renderSkillEntry } from './manifest.js'
+import { estimateTokens } from './tokens.js'
 
 let skillsDir: string
 
@@ -43,6 +45,59 @@ describe('SEED_SKILLS', () => {
       expect(match).not.toBeNull()
       expect(/name:\s*(.+)/.exec(match![1])?.[1].trim()).toBe(skill.name)
       expect(/description:\s*(.+)/.exec(match![1])?.[1].trim()).toBeTruthy()
+    }
+  })
+})
+
+describe('what every seed costs in every request', () => {
+  /**
+   * Split one seed's frontmatter into its lines.
+   * @param content - The complete `SKILL.md`
+   * @returns The frontmatter block's lines
+   */
+  function frontmatterLines(content: string): string[] {
+    return (/^---\n([\s\S]*?)\n---\n/.exec(content)?.[1] ?? '').split('\n')
+  }
+
+  test('no description is wrapped onto a second line', () => {
+    // `parseSkillFrontmatter` matches `description:\s*(.+)`, and `.` does not match a
+    // newline — so a wrapped description silently loses everything after the first line.
+    // Verified against the real loader: a two-line description reads back as one, with no
+    // error and no warning. The description is the only text the model matches a skill
+    // on, so half of one is a skill that never triggers for the reason it was written.
+    for (const skill of SEED_SKILLS) {
+      const lines = frontmatterLines(skill.content)
+      const at = lines.findIndex((line) => line.startsWith('description:'))
+
+      expect(at).toBeGreaterThanOrEqual(0)
+
+      const next = lines[at + 1]
+      // A YAML continuation is indented. Anything else is a new key or the block's end.
+      expect(next === undefined || !/^\s/.test(next)).toBe(true)
+    }
+  })
+
+  test('every name is one load_skill can resolve', () => {
+    // `load_skill` takes a name, never a path — that is what leaves confinement nothing
+    // to refuse. A seed whose name the pattern rejects is advertised in the manifest and
+    // then unloadable.
+    for (const skill of SEED_SKILLS) {
+      expect(isValidSkillName(skill.name)).toBe(true)
+    }
+  })
+
+  test('no manifest entry outgrows its always-on budget', () => {
+    // Every entry below is in *every* request, whether or not the skill is used. The cap
+    // is the ~100 tokens per skill that progressive disclosure budgets for its
+    // always-loaded tier, measured on the rendered XML rather than the description alone
+    // — the wrapper is about 20 tokens on its own, which a description-length estimate
+    // misses. A skill needing more than this has a description doing the body's job.
+    for (const skill of SEED_SKILLS) {
+      const description = /description:\s*(.+)/.exec(skill.content)?.[1]?.trim() ?? ''
+      const entry = renderSkillEntry({ name: skill.name, description } as never)
+
+      expect(description.length).toBeGreaterThan(0)
+      expect(estimateTokens(entry)).toBeLessThanOrEqual(100)
     }
   })
 })
