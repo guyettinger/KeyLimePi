@@ -97,7 +97,7 @@ The split between the two registers is the whole design:
 
 | Register | Lives in | Cost | Says |
 |---|---|---|---|
-| Always on | `system-prompt.ts` | ~70 tok/request | Read `memory/INDEX.md` first. Record as you go. Load `remember` for the format. |
+| Always on | `system-prompt.ts` | 114 tok/request, up from the 56 the `NOTES.md` paragraph cost | Read `memory/INDEX.md` first. Record as you go. The three skills have the rest. |
 | Always on, per app | `<app>/AGENTS.md` | measured in `context-files` | What this app is, how to run it, its conventions. |
 | On demand | `plan` / `implement` / `remember` | +149 tok/request advertised, body free until loaded | The method. |
 

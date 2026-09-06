@@ -53,10 +53,10 @@ const header = `/**
  * \`SkillsLoader\` reads \`~/.keylimepi/skills\`, and for a long time nothing ever wrote it.
  * The copies under \`docs/skills/\` were exactly that — copies, with no install step — so
  * on any machine where they had not been placed by hand the agent ran with **no skills
- * at all**. That is worse than it sounds: \`working-notes\` is the \`NOTES.md\` convention
- * the post-compaction nudge in \`agent/session.ts\` explicitly tells the model to go and
- * read, so the one mechanism built to survive a summarized conversation was never taught
- * to the model that needed it.
+ * at all**. That is worse than it sounds: \`remember\` defines the \`memory/\` layout the
+ * post-compaction nudge in \`agent/session.ts\` explicitly sends the model to, so the one
+ * mechanism built to survive a summarized conversation was never taught to the model that
+ * needed it.
  *
  * The content is embedded rather than copied from \`docs/\` at runtime, following
  * \`DEFAULT_GITIGNORE\` in \`../apps/templates.ts\`. A packaged app does not ship the

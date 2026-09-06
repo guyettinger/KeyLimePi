@@ -879,9 +879,9 @@ The user named ${named.length === 1 ? 'a skill' : 'skills'}: ${list}. Call \`loa
  *
  * `~/.keylimepi/skills` was read by the agent and by the Skills panel and written by
  * neither, so on any install where the `docs/skills/` copies had not been placed by hand
- * the agent ran with none. `working-notes` is the one that matters: the post-compaction
- * nudge in `agent/session.ts` tells the model to read `NOTES.md`, and that skill is
- * where the convention for keeping one is defined.
+ * the agent ran with none. `remember` is the one that matters: the post-compaction nudge
+ * in `agent/session.ts` sends the model to `memory/INDEX.md`, and that skill is where the
+ * format of the index — and of the notes it points at — is defined.
  *
  * A skill the user has edited is never overwritten, but one Key Lime Pi shipped with content
  * that was untrue of this agent is corrected in place — see {@link seedSkills}.

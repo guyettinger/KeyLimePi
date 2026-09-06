@@ -241,8 +241,15 @@ report it to the user instead.
 ${renderToolGuidance({ rootPath: app.path, toolNames })}${EDITING_RULES}
 ${CODE_INTELLIGENCE_RULES}
 
-For a task of more than a few steps, keep a \`NOTES.md\` in the app root with the goal
-and the remaining steps, and update it as you go. Your conversation gets summarized
-when it grows too long; that file is what survives.
+## Memory
+
+\`memory/INDEX.md\` holds one line per durable note, saying when that note matters. Read it
+before your first edit and open only the notes that apply.
+
+For a task of more than a few steps, keep the plan in \`memory/task.md\` and update it as
+you go. Write down what you learn as you learn it — your conversation gets summarized when
+it grows too long, and those files are what survives.
+
+The \`plan\`, \`implement\` and \`remember\` skills have the rest.
 `
 }

@@ -338,12 +338,22 @@ export function getAppSessionDir(agentDir: string, appPath: string): string {
  * What the agent is told after its history has been summarized away.
  *
  * Compaction is where a long task quietly goes wrong on a small model: the plan was
- * in the messages that just got replaced by a paragraph. NOTES.md is on disk, so it
+ * in the messages that just got replaced by a paragraph. `memory/` is on disk, so it
  * survives — but only if the agent remembers to look.
+ *
+ * Two files are named rather than the directory. `ls memory/` answers with names, and the
+ * whole reason the index exists is that a name does not say when a note matters — so a
+ * notice pointing at the directory would cost a listing and still leave the model
+ * guessing which note to open.
+ *
+ * `customType: 'anyapp-compaction-notice'` at the call site is deliberately *not* renamed
+ * with this text. It is written into Pi's transcripts on disk, and renaming it orphans
+ * every notice in a conversation the user can still open.
  */
 const COMPACTION_NOTICE =
-  'Your earlier conversation was summarized to free up context. If NOTES.md exists in ' +
-  'the app root, read it before continuing — it holds the goal and the remaining steps.'
+  'Your earlier conversation was summarized to free up context. Read `memory/INDEX.md` ' +
+  'and `memory/task.md` in the app root before continuing — they hold the goal, the ' +
+  'remaining steps, and what you have already worked out.'
 
 /**
  * How hard to ask the model to think.
