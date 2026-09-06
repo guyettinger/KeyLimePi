@@ -101,6 +101,66 @@ describe('seed content stays in step with docs/skills', () => {
   })
 })
 
+describe('retiring working-notes', () => {
+  const shipped = SUPERSEDED_SEEDS.find((seed) => seed.name === 'working-notes')!
+
+  const asShipped = `---
+name: working-notes
+description: Keep a NOTES.md checklist in the app root for any task of more than a few steps, so the plan survives when the conversation is summarized. Use before starting multi-step work, and after each step.
+---
+
+${shipped.body}
+`
+
+  test('is listed as removed rather than rewritten', () => {
+    // The correction is three skills under different names, so there is nothing to
+    // rewrite this one into. A `removed: false` entry here would look for a replacement
+    // in SEED_SKILLS, find none, and silently leave the stale skill in place.
+    expect(shipped.removed).toBe(true)
+    expect(SEED_SKILLS.some((seed) => seed.name === 'working-notes')).toBe(false)
+  })
+
+  test('an untouched copy goes, and the memory skills arrive in the same pass', async () => {
+    await mkdir(join(skillsDir, 'working-notes'), { recursive: true })
+    await writeFile(join(skillsDir, 'working-notes', 'SKILL.md'), asShipped, 'utf-8')
+
+    const result = await seedSkills(skillsDir)
+
+    expect(result.removed).toContain('working-notes')
+    expect(existsSync(join(skillsDir, 'working-notes'))).toBe(false)
+    for (const name of ['plan', 'implement', 'remember']) {
+      expect(result.installed).toContain(name)
+    }
+  })
+
+  test('the entry matches the body every install actually has', () => {
+    // The comparison in `seedSkills` is `parseSkillBody(onDisk) !== seed.body`, so this
+    // entry is an equality key against files on users' disks. A single character adrift
+    // and the check answers "the user edited this" for a file nobody touched, and the
+    // skill it exists to retire is kept forever.
+    expect(parseSkillBody(asShipped)).toBe(shipped.body)
+    expect(isSupersededSeed('working-notes', parseSkillBody(asShipped))).toBe(true)
+  })
+
+  test('a copy the user edited survives, unflagged, still advertising NOTES.md', async () => {
+    // Never overwriting a user's edit is the rule, and this is its cost. `outdated` is
+    // `isSupersededSeed`, which is true only of an *exact* match to a shipped body — and
+    // an exact match is deleted by the pass above before any panel can render it. So an
+    // edited copy is not flagged; it stays, and keeps telling the model to use NOTES.md
+    // while the system prompt says `memory/`. The `remember` skill's "If You Find a
+    // NOTES.md" section is what resolves that, in the app rather than here.
+    const mine = `${asShipped}\nAnd one line of my own.`
+    await mkdir(join(skillsDir, 'working-notes'), { recursive: true })
+    await writeFile(join(skillsDir, 'working-notes', 'SKILL.md'), mine, 'utf-8')
+
+    const result = await seedSkills(skillsDir)
+
+    expect(result.removed).not.toContain('working-notes')
+    expect(await readFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'utf-8')).toBe(mine)
+    expect(isSupersededSeed('working-notes', parseSkillBody(mine))).toBe(false)
+  })
+})
+
 describe('superseded seeds', () => {
   test('no shipped seed is also listed as superseded', () => {
     // Listing a *current* body would have every launch rewrite the file it just wrote,

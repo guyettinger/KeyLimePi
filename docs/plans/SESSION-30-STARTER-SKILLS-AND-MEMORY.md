@@ -80,7 +80,7 @@ the same on the next launch, without a `NOTES.md` anywhere in the prompt.
     plan/SKILL.md            <- new, seeded once, shared by every app
     implement/SKILL.md       <- new
     remember/SKILL.md        <- new
-    working-notes/           <- removed when untouched, flagged Outdated when edited
+    working-notes/           <- removed when untouched; an edited copy is left alone
     create-skill/ debug-fix/ enhance-ui/ lookup-docs/ manage-versions/
 
   apps/my-app/
@@ -370,8 +370,20 @@ git show 4f6b266:docs/skills/working-notes/SKILL.md \
 Backticks and `${` inside it must be escaped for the template literal, the way every
 existing entry in the file is.
 
-A user who edited their copy keeps it, and the Skills panel flags it **Outdated** —
-which is the honest answer, since the skill it describes no longer exists.
+A user who edited their copy keeps it. It is **not** flagged Outdated, and an earlier
+draft of this plan said it would be — worth stating plainly, because the panel's
+`outdated` flag is `isSupersededSeed`, which is true only of an *exact* match to a
+shipped body, and an exact match is deleted by the pass above before any panel can render
+it. `outdated` therefore means "the correction did not run", not "your copy is stale".
+
+So the residual is real: an install whose `working-notes` was edited keeps a skill
+advertising `NOTES.md` in every request while the system prompt says `memory/` — two
+conflicting instructions. It is accepted rather than fixed, because never overwriting a
+user's edit is the rule the whole seeding design rests on, and the alternative is
+Key Lime Pi deleting a file the user chose to write. The `remember` skill's "If You Find a
+NOTES.md" section resolves it in the app, where the agent can see both and the user can
+watch it happen. `seed.test.ts` asserts this behaviour rather than the one this plan
+originally described.
 
 ---
 
