@@ -51,7 +51,7 @@ The implementation is split into **6 independent sessions**, each resulting in a
 | [26. The Instrument Row](SESSION-26-INSTRUMENT-ROW.md) | Composer chrome | Four strips become one fixed-height gauge row; Activity, Daemon and Changes panels; telemetry over IPC | Complete | [Notes](SESSION-26-NOTES.md) |
 | 28. Multiple Workspaces | Concurrency + shell | Open-app rail at 64px, Skills into the dock and Settings, five Settings tabs; per-app workspace runtimes in main, one visible turn queue, every workspace mounted at once | Complete | [Notes](SESSION-28-NOTES.md) |
 | 29. Key Lime Pi | Rename | `Pi Taster` → `Key Lime Pi`, `pitaster` → `keylimepi`; workspace migration becomes a chain across both renames; two carry-over defects from the last rename fixed | Complete | [Notes](SESSION-29-NOTES.md) |
-| [30. Starter Skills and Memory](SESSION-30-STARTER-SKILLS-AND-MEMORY.md) | How a sub-app starts out | `plan`/`implement`/`remember` seeded, a per-app `AGENTS.md`, an indexed gitignored `memory/` replacing `NOTES.md`, backfilled into existing apps | Planned | |
+| [30. Starter Skills and Memory](SESSION-30-STARTER-SKILLS-AND-MEMORY.md) | How a sub-app starts out | `plan`/`implement`/`remember` seeded, a per-app `AGENTS.md`, an indexed gitignored `memory/` replacing `NOTES.md`, backfilled into existing apps | In progress | |
 
 ## Session 6 Sub-Sessions
 

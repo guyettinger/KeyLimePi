@@ -92,7 +92,8 @@ Settings carries an override for when both the daemon and the default are wrong.
 Four things keep a long session coherent on a local model, all configurable:
 
 - **Compaction** is Pi's, with Key Lime Pi's thresholds. `compaction_end` nudges the
-  agent to re-read `NOTES.md`, which is on disk and survives being summarized.
+  agent to re-read `memory/INDEX.md` and `memory/task.md`, which are on disk and survive
+  being summarized. See **What survives being summarized** below.
 - **`agent/context-trim.ts`** shapes what is *sent*: long tool results truncated
   with a pointer to resume from, a read whose every line a later read returned
   collapsed into that later one, stale screenshots dropped. The transcript, git
@@ -890,6 +891,81 @@ way a single poisoned `web_fetch` does not. Identity spoofing is closed; provena
 not tracked. It is mitigated the same way `web_fetch` is: every write and every load is a
 visible tool call in the transcript, and the Skills panel shows the body.
 
+## What survives being summarized
+
+A conversation is summarized when it outgrows the window, and a summary keeps the gist and
+drops the specifics — which is exactly backwards for a task in progress. Until Session 30
+the answer was one file, `NOTES.md`, and the answer was wrong in three ways at once.
+
+It was **monolithic**, so it was read whole or not at all, and the `working-notes` skill
+had to tell the agent to keep it "under a screen" and to "delete finished sections once
+the whole task is done" — an instruction to *destroy* the durable part in order to protect
+the context budget. It was **tracked**, so every update was an auto-commit and a row in the
+changed-files strip. And because it was tracked, a `rollback` reverted it, erasing the note
+explaining the failure that caused the rollback at exactly the moment it was worth having.
+
+**`memory/` is the skills manifest applied to notes.** `memory/INDEX.md` carries one line
+per note saying *when that note matters*, and the bodies are read on demand. That is the
+same two-register split the Skills section describes, and it is the mechanism a single
+file structurally cannot have: fifteen lines and then one relevant note, instead of
+everything or nothing.
+
+```
+<app-root>/
+  AGENTS.md          tracked, in every request — what this app IS
+  memory/            gitignored, never committed
+    INDEX.md         one line per note. The only file read at the start of a task.
+    task.md          the live plan. Deleted when the task is done.
+    <topic>.md       one durable subject each.
+```
+
+**Gitignored is the load-bearing property, not a tidiness choice.** `rollback` is a
+`git checkout`, which restores tracked files and leaves untracked ones in place — the same
+fact `autoCommitRefactor` relies on from the other direction. So the note explaining why an
+approach failed survives the rollback that failure caused. It also means no commit per
+memory write, and `statusMatrix` skips ignored-and-untracked paths, so memory costs nothing
+in `git_status` or the changed-files strip. `templates.test.ts` asserts it through the real
+`initGitRepo` rather than asserting the string is in `DEFAULT_GITIGNORE`: the property is
+that nothing under `memory/` is *tracked*, and only git can answer that.
+
+**The protocol splits across two registers, and the split is not stylistic.** "Check your
+memory" triggers on *every* task, so it cannot be a skill — a skill is matched against a
+description, and by the time the model is choosing skills it has already decided what to
+do. It is 114 tokens of `system-prompt.ts`, up from the 56 the `NOTES.md` paragraph cost.
+The *format* of memory triggers only when writing memory, so that is `remember`, and its
+body costs nothing until loaded. A first draft of the prompt section cost 141; spending
+freely in the always-on block would undercut the argument the block is making.
+
+**A seeded `AGENTS.md` is about the app, never about method.** Pi loads it into every
+request, so it is the one place a fact about the app is in front of the model without a
+tool call — and no template had ever written one. Restating the method there would charge
+every request twice for the same instruction. It is agent-writable under `acceptEdits` and
+paid for on every request, so the seeded file says so about its own size; the cost is
+visible in the context meter's `context-files` block and nowhere else.
+
+**Three skills, not one convention.** `plan` writes the goal, the ordered steps and a check
+per step into `memory/task.md`; `implement` works one step at a time and pairs a twice-failed
+`edit` with `replace_lines` and the line numbers the repair message printed; `remember`
+carries the format. They are workspace skills, so every app has them and any app can
+override one by writing `skills/<name>/SKILL.md`, which shadows the workspace copy. The
+library went from ~361 to 510 tokens of manifest — +149, measured on the rendered entries,
+because `renderSkillEntry`'s wrapper costs about 20 tokens per skill that a
+description-length estimate misses.
+
+**A live `NOTES.md` is not migrated by code.** Its contents are prose only a model can sort
+into subjects, and code that guessed would either lose the file or produce one note called
+`notes.md` — which is the shape being replaced. `remember` tells the agent to fold one in
+the first time it sees one, in a visible tool call the user can watch and roll back.
+
+**One residual, accepted rather than fixed.** `seedSkills` removes `working-notes` where
+the body still matches what Key Lime Pi shipped, and leaves it alone where the user edited
+it — and an edited copy is *not* flagged Outdated, because `outdated` is `isSupersededSeed`,
+true only of an exact match, and an exact match is deleted at startup before any panel
+renders. So `outdated` means "the correction did not run". An install whose `working-notes`
+was edited therefore keeps a skill advertising `NOTES.md` while the prompt says `memory/`.
+Never overwriting a user's edit is the rule the whole seeding design rests on, and
+`remember`'s fold-in is what resolves it in the app.
+
 ## Names that must not be rebranded
 
 The app has been renamed **twice**: **anyapp** to **Pi Taster**, then Pi Taster to
@@ -1162,3 +1238,11 @@ auto-commits to, so anything kept there would be rolled back by a rollback of th
 
 The last is the sharpest case: the changed-files strip measures against it, so storing it
 in the app would destroy the exact reference a rollback should be measured against.
+
+**Living outside the app is not the only way to survive a rollback**, and `memory/` is the
+counterexample — it sits *inside* the app root, because `checkConfinement` refuses every
+path outside it and the agent has to be able to write its own notes. What saves it is
+being in `DEFAULT_GITIGNORE`: `rollback` is a `git checkout`, which restores tracked files
+and leaves untracked ones in place. So the rule is not "outside the app" but "not tracked
+by the app's repo", and the four files above are outside it because nothing else about
+them belongs to the app. See **What survives being summarized**.
