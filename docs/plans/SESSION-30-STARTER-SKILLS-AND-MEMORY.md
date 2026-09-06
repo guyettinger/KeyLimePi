@@ -99,7 +99,7 @@ The split between the two registers is the whole design:
 |---|---|---|---|
 | Always on | `system-prompt.ts` | ~70 tok/request | Read `memory/INDEX.md` first. Record as you go. Load `remember` for the format. |
 | Always on, per app | `<app>/AGENTS.md` | measured in `context-files` | What this app is, how to run it, its conventions. |
-| On demand | `plan` / `implement` / `remember` | ~130 tok/request advertised, body free until loaded | The method. |
+| On demand | `plan` / `implement` / `remember` | +149 tok/request advertised, body free until loaded | The method. |
 
 "Check your memory" triggers on *every* task, so it cannot be a skill — a skill is
 matched against a description, and by the time the model is choosing skills it has
@@ -770,8 +770,22 @@ Then, in the real app (the `run-app` skill):
    Code panel opens both. The changed-files strip is empty — `memory/` must not appear.
 2. **The manifest.** Open the Skills panel. `plan`, `implement` and `remember` are listed
    under workspace skills; `working-notes` is gone. The header's per-request token count
-   has moved by roughly +130 against the previous six-skill total, and the context meter's
+   has moved by **+149** against the previous six-skill total, and the context meter's
    `skills` block agrees with it.
+
+   Measured on the rendered manifest entries, not on the descriptions alone —
+   `renderSkillEntry` wraps each in an indented `<skill>` block that costs about 20 tokens
+   on its own, which a description-length estimate misses:
+
+   | Skill | Entry | Body (free until loaded) |
+   |---|---|---|
+   | `plan` | 74 | 556 |
+   | `implement` | 63 | 514 |
+   | `remember` | 74 | 742 |
+   | `working-notes` (removed) | −62 | −509 |
+
+   The five untouched seeds total 299 tokens of manifest, so the library goes from ~361 to
+   510 — about 1.6% of a 32k window.
 3. **The context meter.** The `context-files` block is now non-zero on a fresh app and
    labelled `AGENTS.md` — the fixed cost of the seed, measured rather than estimated here.
 4. **An existing app.** On an install that predates this, launch and confirm the app now

@@ -22,10 +22,19 @@ beforeEach(async () => {
 })
 
 describe('SEED_SKILLS', () => {
-  test('carries the working-notes skill the compaction nudge depends on', () => {
-    const notes = SEED_SKILLS.find((skill) => skill.name === 'working-notes')
-    expect(notes).toBeDefined()
-    expect(notes!.content).toContain('NOTES.md')
+  test('carries the memory skills the compaction nudge depends on', () => {
+    // The nudge in `agent/session.ts` sends the model to `memory/INDEX.md` and
+    // `memory/task.md`. Nothing else checks that the skills describing those files still
+    // name them, so a rename on one side would silently point the model at nothing.
+    const find = (name: string): string => {
+      const skill = SEED_SKILLS.find((candidate) => candidate.name === name)
+      expect(skill).toBeDefined()
+      return skill!.content
+    }
+
+    expect(find('remember')).toContain('memory/INDEX.md')
+    expect(find('plan')).toContain('memory/task.md')
+    expect(find('implement')).toContain('memory/task.md')
   })
 
   test('every entry is a parseable SKILL.md whose frontmatter name matches its directory', () => {
@@ -45,19 +54,23 @@ describe('seedSkills', () => {
     expect(result.installed).toEqual(SEED_SKILLS.map((skill) => skill.name))
     expect(result.skipped).toEqual([])
 
-    const written = await readFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'utf-8')
-    expect(written).toContain('NOTES.md')
+    const written = await readFile(join(skillsDir, 'remember', 'SKILL.md'), 'utf-8')
+    expect(written).toContain('memory/INDEX.md')
   })
 
   test('never overwrites a skill the user has edited', async () => {
-    await mkdir(join(skillsDir, 'working-notes'), { recursive: true })
-    await writeFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'mine', 'utf-8')
+    // `create-skill` is in SUPERSEDED_SEEDS, so this also covers the sharper case: a
+    // body that differs from the shipped one must survive the correction pass, not only
+    // the seeding pass.
+    await mkdir(join(skillsDir, 'create-skill'), { recursive: true })
+    await writeFile(join(skillsDir, 'create-skill', 'SKILL.md'), 'mine', 'utf-8')
 
     const result = await seedSkills(skillsDir)
 
-    expect(result.skipped).toContain('working-notes')
-    expect(result.installed).not.toContain('working-notes')
-    expect(await readFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'utf-8')).toBe('mine')
+    expect(result.skipped).toContain('create-skill')
+    expect(result.installed).not.toContain('create-skill')
+    expect(result.corrected).not.toContain('create-skill')
+    expect(await readFile(join(skillsDir, 'create-skill', 'SKILL.md'), 'utf-8')).toBe('mine')
   })
 
   test('is idempotent across runs', async () => {
