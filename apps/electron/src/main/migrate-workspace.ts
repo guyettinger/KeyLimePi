@@ -40,10 +40,18 @@
 
 import { mkdir, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import * as git from 'isomorphic-git'
 import fs from 'node:fs'
-import { COMMIT_AUTHOR, DEFAULT_GITIGNORE, getAppSessionDir } from '@keylimepi/shared'
+import {
+  applyTemplateVars,
+  COMMIT_AUTHOR,
+  DEFAULT_AGENTS_MD,
+  DEFAULT_GITIGNORE,
+  DEFAULT_MEMORY_INDEX,
+  getAppSessionDir
+} from '@keylimepi/shared'
+import type { AppMetadata } from '@keylimepi/core'
 
 /** The workspace directory's name now. */
 export const WORKSPACE_DIR = '.keylimepi'
@@ -93,6 +101,8 @@ export interface MigrateWorkspaceResult {
   migratedSessions: string[]
   /** App ids that were given the default `.gitignore` they were scaffolded without. */
   backfilledGitignore: string[]
+  /** App ids given the `AGENTS.md` and ignored `memory/` they were scaffolded without. */
+  backfilledMemory: string[]
   /** App ids whose active-session pointer named a session they do not have. */
   repairedPointers: string[]
 }
@@ -386,6 +396,117 @@ async function backfillGitignore(appPath: string): Promise<boolean> {
   return true
 }
 
+/** The ignore entry that keeps an app's `memory/` out of its git repository. */
+const MEMORY_IGNORE_ENTRY = 'memory/'
+
+/**
+ * Gives an app the `AGENTS.md`, the ignored `memory/` and the memory index it was
+ * scaffolded without.
+ *
+ * Three independent repairs, because an app can be missing any subset of them. Every app
+ * created before Session 30 is missing all three, and one created between that session's
+ * `.gitignore` change and its `createApp` change would have the ignore entry and no index.
+ *
+ * The `.gitignore` is **appended to**, which narrows the rule {@link backfillGitignore}
+ * states — that an existing `.gitignore` is never touched, however little it covers.
+ * Replacing a user's file is not the same as adding one line to it, and without the line
+ * the repair does active harm: `initGitRepo` adds every file, so `memory/` becomes
+ * tracked, every note the agent writes becomes an auto-commit and a row in the
+ * changed-files strip, and `rollback` — a `git checkout` — reverts the note explaining
+ * the failure being rolled back. That is the outcome the whole design exists to avoid,
+ * so the entry is worth the exception.
+ *
+ * Runs *after* `backfillGitignore`, and depends on that order: an app with no
+ * `.gitignore` at all is given `DEFAULT_GITIGNORE`, which already carries the entry, and
+ * this then finds it present and does nothing.
+ *
+ * `memory/INDEX.md` is written but never committed — it is ignored, which is the point.
+ * An empty directory is not enough: a model told to read that path and handed a failed
+ * `read` learns that memory does not work in this app.
+ *
+ * @param appPath - Absolute path to the sub-app root
+ * @returns Whether anything was written
+ */
+async function backfillAgentMemory(appPath: string): Promise<boolean> {
+  let changed = false
+  const toCommit: string[] = []
+
+  const ignorePath = join(appPath, '.gitignore')
+  try {
+    const current = await readFile(ignorePath, 'utf-8')
+    const listed = current.split('\n').some((line) => line.trim() === MEMORY_IGNORE_ENTRY)
+
+    if (!listed) {
+      const separator = current.endsWith('\n') ? '' : '\n'
+      await writeFile(
+        ignorePath,
+        `${current}${separator}\n# Key Lime Pi agent memory\n${MEMORY_IGNORE_ENTRY}\n`,
+        'utf-8'
+      )
+      toCommit.push('.gitignore')
+      changed = true
+    }
+  } catch {
+    // No `.gitignore`, or one that will not read. `backfillGitignore` ran first and
+    // writes one carrying the entry; if that failed too, reporting it twice helps nobody.
+  }
+
+  if (!(await exists(join(appPath, 'AGENTS.md')))) {
+    // The app's real name, so the seeded heading is not the directory slug. Read the way
+    // `migrateAppMeta` reads it — and note that `migrateAppMeta` runs earlier in the same
+    // loop and may have just renamed an older file to `META_FILE`, so this is correct in
+    // both the just-migrated and the already-current case.
+    const id = basename(appPath)
+    let meta: Partial<AppMetadata> = {}
+    try {
+      meta = JSON.parse(await readFile(join(appPath, META_FILE), 'utf-8'))
+    } catch {
+      // Unreadable or absent. The fallbacks below hold, and an app whose metadata will
+      // not parse still benefits from having the file.
+    }
+
+    await writeFile(
+      join(appPath, 'AGENTS.md'),
+      applyTemplateVars(DEFAULT_AGENTS_MD, {
+        name: meta.name ?? id,
+        description: meta.description ?? '',
+        id: meta.id ?? id
+      }),
+      'utf-8'
+    )
+    toCommit.push('AGENTS.md')
+    changed = true
+  }
+
+  if (!(await exists(join(appPath, 'memory', 'INDEX.md')))) {
+    await mkdir(join(appPath, 'memory'), { recursive: true })
+    await writeFile(join(appPath, 'memory', 'INDEX.md'), DEFAULT_MEMORY_INDEX, 'utf-8')
+    changed = true
+  }
+
+  // Same reasoning as `backfillGitignore`: `initGitRepo` tracks everything, so a tracked
+  // file left uncommitted reports as a change forever and puts an edit the user never
+  // made in front of the next rollback. A repository that cannot be committed to is not
+  // a reason to skip the write.
+  if (toCommit.length > 0 && (await exists(join(appPath, '.git')))) {
+    try {
+      for (const filepath of toCommit) {
+        await git.add({ fs, dir: appPath, filepath })
+      }
+      await git.commit({
+        fs,
+        dir: appPath,
+        message: 'chore: add AGENTS.md and ignore the agent memory directory',
+        author: COMMIT_AUTHOR
+      })
+    } catch (error) {
+      console.error(`Could not commit the memory backfill in ${appPath}:`, error)
+    }
+  }
+
+  return changed
+}
+
 /**
  * Clears an active-session pointer that names a session the app does not have.
  *
@@ -528,6 +649,7 @@ export async function migrateWorkspace(
     migratedApps: [],
     migratedSessions: [],
     backfilledGitignore: [],
+    backfilledMemory: [],
     repairedPointers: []
   }
 
@@ -603,6 +725,13 @@ export async function migrateWorkspace(
       if (await backfillGitignore(appPath)) result.backfilledGitignore.push(id)
     } catch (error) {
       console.error(`Could not write a .gitignore for app ${id}:`, error)
+    }
+
+    // After the step above, and dependent on that order — see `backfillAgentMemory`.
+    try {
+      if (await backfillAgentMemory(appPath)) result.backfilledMemory.push(id)
+    } catch (error) {
+      console.error(`Could not backfill the memory directory for app ${id}:`, error)
     }
 
     try {
