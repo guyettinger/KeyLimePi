@@ -85,8 +85,16 @@ export async function autoCommitToolResult(params: {
     return { committed: false }
   }
 
+  // An ignored path cannot be committed, only *appear* to be. `git.add` on one is a
+  // silent no-op, so the commit that follows carries no changes and names a file it does
+  // not contain. `memory/` is ignored by design — that is what keeps a rollback from
+  // deleting the agent's notes — so without this every note it writes mints an empty
+  // commit into the History panel.
+  const versions = new VersionManager(rootPath)
+  if (await versions.isIgnored(relativePath)) return { committed: false }
+
   try {
-    await new VersionManager(rootPath).commit({
+    await versions.commit({
       message: `${result.toolName}: ${relativePath}`,
       files: [relativePath]
     })
@@ -221,16 +229,27 @@ export async function autoCommitRefactor(params: {
   if (!enabled) return { committed: false }
   if (relativePaths.length === 0) return { committed: false }
 
+  // Same reasoning as above, per file: a rename touching one ignored path would otherwise
+  // put a name in the commit message that the commit does not carry. Filtering rather
+  // than refusing, because the *other* files in that rename still have to be committed
+  // together — that is the whole reason this function exists.
+  const versions = new VersionManager(rootPath)
+  const committable: string[] = []
+  for (const filepath of relativePaths) {
+    if (!(await versions.isIgnored(filepath))) committable.push(filepath)
+  }
+  if (committable.length === 0) return { committed: false }
+
   try {
-    await new VersionManager(rootPath).commit({
+    await versions.commit({
       message: `refactor: ${description}`,
-      files: relativePaths
+      files: committable
     })
     return { committed: true }
   } catch (error) {
     return {
       committed: false,
-      note: `\n[auto-commit failed for ${relativePaths.join(', ')}: ${(error as Error).message}]`
+      note: `\n[auto-commit failed for ${committable.join(', ')}: ${(error as Error).message}]`
     }
   }
 }
