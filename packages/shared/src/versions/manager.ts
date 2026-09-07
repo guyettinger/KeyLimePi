@@ -153,6 +153,35 @@ export class VersionManager {
   }
 
   /**
+   * Whether the repository's ignore rules exclude a path.
+   *
+   * Auto-commit needs this because `git.add` on an ignored path is a silent no-op: the
+   * index does not change, `git.commit` still runs, and the result is an **empty commit**
+   * carrying a message that names a file it does not contain. In the History panel that
+   * expands to nothing, which reads as a commit with a small diff rather than as a commit
+   * with no diff.
+   *
+   * The case that made this routine is `memory/`, which is ignored precisely so a
+   * rollback cannot delete the agent's notes — so every note it writes would otherwise
+   * mint one of these. But the defect is older and more general: a template ignoring
+   * `dist/`, or a user ignoring anything the agent then writes to, produced the same
+   * thing. So the question asked here is git's, not a list of paths this app knows about.
+   *
+   * @param filepath - A path relative to the repository root
+   * @returns True when the ignore rules exclude it
+   */
+  async isIgnored(filepath: string): Promise<boolean> {
+    try {
+      return await git.isIgnored({ fs, dir: this.dir, filepath })
+    } catch {
+      // No repository, or an unreadable `.gitignore`. Answering "not ignored" keeps the
+      // previous behaviour, and the commit that follows will fail loudly if the repo is
+      // the problem.
+      return false
+    }
+  }
+
+  /**
    * Get a specific commit by OID.
    * @param oid - The commit SHA.
    * @returns The commit details.

@@ -13,7 +13,9 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { SEED_SKILLS } from './seed-content.js'
 import { seedSkills } from './seed.js'
 import { SUPERSEDED_SEEDS, isSupersededSeed } from './superseded-seeds.js'
-import { parseSkillBody } from './loader.js'
+import { isValidSkillName, parseSkillBody } from './loader.js'
+import { renderSkillEntry } from './manifest.js'
+import { estimateTokens } from './tokens.js'
 
 let skillsDir: string
 
@@ -22,10 +24,19 @@ beforeEach(async () => {
 })
 
 describe('SEED_SKILLS', () => {
-  test('carries the working-notes skill the compaction nudge depends on', () => {
-    const notes = SEED_SKILLS.find((skill) => skill.name === 'working-notes')
-    expect(notes).toBeDefined()
-    expect(notes!.content).toContain('NOTES.md')
+  test('carries the memory skills the compaction nudge depends on', () => {
+    // The nudge in `agent/session.ts` sends the model to `memory/INDEX.md` and
+    // `memory/task.md`. Nothing else checks that the skills describing those files still
+    // name them, so a rename on one side would silently point the model at nothing.
+    const find = (name: string): string => {
+      const skill = SEED_SKILLS.find((candidate) => candidate.name === name)
+      expect(skill).toBeDefined()
+      return skill!.content
+    }
+
+    expect(find('remember')).toContain('memory/INDEX.md')
+    expect(find('plan')).toContain('memory/task.md')
+    expect(find('implement')).toContain('memory/task.md')
   })
 
   test('every entry is a parseable SKILL.md whose frontmatter name matches its directory', () => {
@@ -38,6 +49,59 @@ describe('SEED_SKILLS', () => {
   })
 })
 
+describe('what every seed costs in every request', () => {
+  /**
+   * Split one seed's frontmatter into its lines.
+   * @param content - The complete `SKILL.md`
+   * @returns The frontmatter block's lines
+   */
+  function frontmatterLines(content: string): string[] {
+    return (/^---\n([\s\S]*?)\n---\n/.exec(content)?.[1] ?? '').split('\n')
+  }
+
+  test('no description is wrapped onto a second line', () => {
+    // `parseSkillFrontmatter` matches `description:\s*(.+)`, and `.` does not match a
+    // newline — so a wrapped description silently loses everything after the first line.
+    // Verified against the real loader: a two-line description reads back as one, with no
+    // error and no warning. The description is the only text the model matches a skill
+    // on, so half of one is a skill that never triggers for the reason it was written.
+    for (const skill of SEED_SKILLS) {
+      const lines = frontmatterLines(skill.content)
+      const at = lines.findIndex((line) => line.startsWith('description:'))
+
+      expect(at).toBeGreaterThanOrEqual(0)
+
+      const next = lines[at + 1]
+      // A YAML continuation is indented. Anything else is a new key or the block's end.
+      expect(next === undefined || !/^\s/.test(next)).toBe(true)
+    }
+  })
+
+  test('every name is one load_skill can resolve', () => {
+    // `load_skill` takes a name, never a path — that is what leaves confinement nothing
+    // to refuse. A seed whose name the pattern rejects is advertised in the manifest and
+    // then unloadable.
+    for (const skill of SEED_SKILLS) {
+      expect(isValidSkillName(skill.name)).toBe(true)
+    }
+  })
+
+  test('no manifest entry outgrows its always-on budget', () => {
+    // Every entry below is in *every* request, whether or not the skill is used. The cap
+    // is the ~100 tokens per skill that progressive disclosure budgets for its
+    // always-loaded tier, measured on the rendered XML rather than the description alone
+    // — the wrapper is about 20 tokens on its own, which a description-length estimate
+    // misses. A skill needing more than this has a description doing the body's job.
+    for (const skill of SEED_SKILLS) {
+      const description = /description:\s*(.+)/.exec(skill.content)?.[1]?.trim() ?? ''
+      const entry = renderSkillEntry({ name: skill.name, description } as never)
+
+      expect(description.length).toBeGreaterThan(0)
+      expect(estimateTokens(entry)).toBeLessThanOrEqual(100)
+    }
+  })
+})
+
 describe('seedSkills', () => {
   test('installs every skill into an empty directory', async () => {
     const result = await seedSkills(skillsDir)
@@ -45,19 +109,23 @@ describe('seedSkills', () => {
     expect(result.installed).toEqual(SEED_SKILLS.map((skill) => skill.name))
     expect(result.skipped).toEqual([])
 
-    const written = await readFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'utf-8')
-    expect(written).toContain('NOTES.md')
+    const written = await readFile(join(skillsDir, 'remember', 'SKILL.md'), 'utf-8')
+    expect(written).toContain('memory/INDEX.md')
   })
 
   test('never overwrites a skill the user has edited', async () => {
-    await mkdir(join(skillsDir, 'working-notes'), { recursive: true })
-    await writeFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'mine', 'utf-8')
+    // `create-skill` is in SUPERSEDED_SEEDS, so this also covers the sharper case: a
+    // body that differs from the shipped one must survive the correction pass, not only
+    // the seeding pass.
+    await mkdir(join(skillsDir, 'create-skill'), { recursive: true })
+    await writeFile(join(skillsDir, 'create-skill', 'SKILL.md'), 'mine', 'utf-8')
 
     const result = await seedSkills(skillsDir)
 
-    expect(result.skipped).toContain('working-notes')
-    expect(result.installed).not.toContain('working-notes')
-    expect(await readFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'utf-8')).toBe('mine')
+    expect(result.skipped).toContain('create-skill')
+    expect(result.installed).not.toContain('create-skill')
+    expect(result.corrected).not.toContain('create-skill')
+    expect(await readFile(join(skillsDir, 'create-skill', 'SKILL.md'), 'utf-8')).toBe('mine')
   })
 
   test('is idempotent across runs', async () => {
@@ -85,6 +153,66 @@ describe('seed content stays in step with docs/skills', () => {
     const onDisk = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
 
     expect(onDisk.sort()).toEqual(SEED_SKILLS.map((skill) => skill.name).sort())
+  })
+})
+
+describe('retiring working-notes', () => {
+  const shipped = SUPERSEDED_SEEDS.find((seed) => seed.name === 'working-notes')!
+
+  const asShipped = `---
+name: working-notes
+description: Keep a NOTES.md checklist in the app root for any task of more than a few steps, so the plan survives when the conversation is summarized. Use before starting multi-step work, and after each step.
+---
+
+${shipped.body}
+`
+
+  test('is listed as removed rather than rewritten', () => {
+    // The correction is three skills under different names, so there is nothing to
+    // rewrite this one into. A `removed: false` entry here would look for a replacement
+    // in SEED_SKILLS, find none, and silently leave the stale skill in place.
+    expect(shipped.removed).toBe(true)
+    expect(SEED_SKILLS.some((seed) => seed.name === 'working-notes')).toBe(false)
+  })
+
+  test('an untouched copy goes, and the memory skills arrive in the same pass', async () => {
+    await mkdir(join(skillsDir, 'working-notes'), { recursive: true })
+    await writeFile(join(skillsDir, 'working-notes', 'SKILL.md'), asShipped, 'utf-8')
+
+    const result = await seedSkills(skillsDir)
+
+    expect(result.removed).toContain('working-notes')
+    expect(existsSync(join(skillsDir, 'working-notes'))).toBe(false)
+    for (const name of ['plan', 'implement', 'remember']) {
+      expect(result.installed).toContain(name)
+    }
+  })
+
+  test('the entry matches the body every install actually has', () => {
+    // The comparison in `seedSkills` is `parseSkillBody(onDisk) !== seed.body`, so this
+    // entry is an equality key against files on users' disks. A single character adrift
+    // and the check answers "the user edited this" for a file nobody touched, and the
+    // skill it exists to retire is kept forever.
+    expect(parseSkillBody(asShipped)).toBe(shipped.body)
+    expect(isSupersededSeed('working-notes', parseSkillBody(asShipped))).toBe(true)
+  })
+
+  test('a copy the user edited survives, unflagged, still advertising NOTES.md', async () => {
+    // Never overwriting a user's edit is the rule, and this is its cost. `outdated` is
+    // `isSupersededSeed`, which is true only of an *exact* match to a shipped body — and
+    // an exact match is deleted by the pass above before any panel can render it. So an
+    // edited copy is not flagged; it stays, and keeps telling the model to use NOTES.md
+    // while the system prompt says `memory/`. The `remember` skill's "If You Find a
+    // NOTES.md" section is what resolves that, in the app rather than here.
+    const mine = `${asShipped}\nAnd one line of my own.`
+    await mkdir(join(skillsDir, 'working-notes'), { recursive: true })
+    await writeFile(join(skillsDir, 'working-notes', 'SKILL.md'), mine, 'utf-8')
+
+    const result = await seedSkills(skillsDir)
+
+    expect(result.removed).not.toContain('working-notes')
+    expect(await readFile(join(skillsDir, 'working-notes', 'SKILL.md'), 'utf-8')).toBe(mine)
+    expect(isSupersededSeed('working-notes', parseSkillBody(mine))).toBe(false)
   })
 })
 

@@ -506,15 +506,20 @@ describe('migrateWorkspace: .gitignore backfill', () => {
   })
 
   test('never rewrites a .gitignore the app already has', async () => {
+    // Narrowed in Session 30, and the distinction is the point: this step still never
+    // replaces the file, but `backfillAgentMemory` appends one `memory/` line to it
+    // afterwards — see the AGENTS.md describe below for why that exception is worth
+    // making. What must stay true here is that nothing the user wrote is lost and that
+    // this step reports having done nothing.
     const appPath = await seedLegacyApp({ under: legacyRoot, id: 'moon-phase' })
     await writeFile(join(appPath, '.gitignore'), 'just-this\n')
 
     const result = await migrateWorkspace({ legacyRoots: [legacyRoot], root })
 
+    const ignore = await readFile(join(root, 'apps', 'moon-phase', '.gitignore'), 'utf-8')
     expect(result.backfilledGitignore).toEqual([])
-    expect(await readFile(join(root, 'apps', 'moon-phase', '.gitignore'), 'utf-8')).toBe(
-      'just-this\n'
-    )
+    expect(ignore.startsWith('just-this\n')).toBe(true)
+    expect(ignore).not.toContain('node_modules/')
   })
 
   test('still writes the file when the app has no git repository', async () => {
@@ -525,6 +530,137 @@ describe('migrateWorkspace: .gitignore backfill', () => {
     const result = await migrateWorkspace({ legacyRoots: [legacyRoot], root })
 
     expect(result.backfilledGitignore).toEqual(['half-scaffolded'])
+  })
+})
+
+describe('migrateWorkspace: AGENTS.md and the memory directory', () => {
+  test('gives an app both, carrying its metadata name, and commits the tracked one', async () => {
+    const appPath = await seedLegacyApp({ under: legacyRoot, id: 'moon-phase' })
+    await writeFile(
+      join(appPath, '.anyapp-meta.json'),
+      JSON.stringify({ id: 'moon-phase', name: 'Moon Phase', description: 'Phases' })
+    )
+
+    const result = await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const migrated = join(root, 'apps', 'moon-phase')
+    expect(result.backfilledMemory).toEqual(['moon-phase'])
+
+    const agents = await readFile(join(migrated, 'AGENTS.md'), 'utf-8')
+    expect(agents).toContain('# Moon Phase')
+    expect(agents).toContain('Phases')
+    expect(agents).not.toContain('{{')
+
+    // Committed for the reason the metadata rename is: `initGitRepo` tracks everything,
+    // so a tracked file left uncommitted reports as a change forever.
+    expect(await dirtyPaths(migrated)).toEqual([])
+  })
+
+  test('falls back to the directory name when the metadata carries none', async () => {
+    // `seedLegacyApp` writes `{ id }` only, which is the shape an early install has.
+    await seedLegacyApp({ under: legacyRoot, id: 'magic-8-ball' })
+
+    await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const agents = await readFile(join(root, 'apps', 'magic-8-ball', 'AGENTS.md'), 'utf-8')
+    expect(agents).toContain('# magic-8-ball')
+    expect(agents).not.toContain('{{')
+  })
+
+  test('writes the memory index and leaves it out of the repository', async () => {
+    // The property the whole design rests on. `rollback` is a `git checkout`, which
+    // restores tracked files and leaves untracked ones alone — so the agent's notes
+    // survive it only while nothing under `memory/` is tracked.
+    await seedLegacyApp({ under: legacyRoot, id: 'moon-phase' })
+
+    await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const migrated = join(root, 'apps', 'moon-phase')
+    expect(await readFile(join(migrated, 'memory', 'INDEX.md'), 'utf-8')).toContain(
+      '# Memory Index'
+    )
+
+    const tracked = await git.listFiles({ fs, dir: migrated, ref: 'HEAD' })
+    expect(tracked).toContain('AGENTS.md')
+    expect(tracked.some((path) => path.startsWith('memory/'))).toBe(false)
+    expect(await dirtyPaths(migrated)).toEqual([])
+  })
+
+  test('appends memory/ to a .gitignore the app already has, keeping what was there', async () => {
+    // A deliberate narrowing of `backfillGitignore`'s "never touch an existing one".
+    // Without the line `initGitRepo` tracks `memory/`, and every note becomes an
+    // auto-commit that a rollback would then revert.
+    const appPath = await seedLegacyApp({ under: legacyRoot, id: 'moon-phase' })
+    await writeFile(join(appPath, '.gitignore'), 'just-this\n')
+
+    const result = await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const ignore = await readFile(join(root, 'apps', 'moon-phase', '.gitignore'), 'utf-8')
+    expect(result.backfilledGitignore).toEqual([])
+    expect(ignore).toContain('just-this')
+    expect(ignore).toContain('memory/')
+  })
+
+  test('appends the entry once, however many times it runs', async () => {
+    const appPath = await seedLegacyApp({ under: legacyRoot, id: 'moon-phase' })
+    await writeFile(join(appPath, '.gitignore'), 'just-this\n')
+
+    await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+    const second = await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const ignore = await readFile(join(root, 'apps', 'moon-phase', '.gitignore'), 'utf-8')
+    expect(second.backfilledMemory).toEqual([])
+    expect(ignore.split('\n').filter((line) => line.trim() === 'memory/')).toHaveLength(1)
+  })
+
+  test('adds no second entry to a .gitignore the earlier step just wrote', async () => {
+    // The ordering dependency stated on `backfillAgentMemory`: an app with no
+    // `.gitignore` gets DEFAULT_GITIGNORE, which already carries the entry.
+    await seedLegacyApp({ under: legacyRoot, id: 'magic-8-ball' })
+
+    await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const ignore = await readFile(join(root, 'apps', 'magic-8-ball', '.gitignore'), 'utf-8')
+    expect(ignore.split('\n').filter((line) => line.trim() === 'memory/')).toHaveLength(1)
+  })
+
+  test('never rewrites an AGENTS.md the app already has', async () => {
+    // It is a file the user and the agent can both edit, and the agent is told to keep
+    // it current — the same restraint `seedSkills` and `backfillGitignore` apply.
+    const appPath = await seedLegacyApp({ under: legacyRoot, id: 'moon-phase' })
+    await writeFile(join(appPath, 'AGENTS.md'), '# Mine\n')
+
+    await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    expect(await readFile(join(root, 'apps', 'moon-phase', 'AGENTS.md'), 'utf-8')).toBe(
+      '# Mine\n'
+    )
+  })
+
+  test('still writes both when the app has no git repository', async () => {
+    const appPath = join(legacyRoot, 'apps', 'half-scaffolded')
+    await mkdir(appPath, { recursive: true })
+    await writeFile(join(appPath, '.anyapp-meta.json'), JSON.stringify({ id: 'half-scaffolded' }))
+
+    const result = await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    const migrated = join(root, 'apps', 'half-scaffolded')
+    expect(result.backfilledMemory).toEqual(['half-scaffolded'])
+    expect(await exists(join(migrated, 'AGENTS.md'))).toBe(true)
+    expect(await exists(join(migrated, 'memory', 'INDEX.md'))).toBe(true)
+  })
+
+  test('leaves a directory that is not an app entirely alone', async () => {
+    // Everything here writes into the app, so a stray directory the user keeps under
+    // `apps/` must not be quietly turned into something that looks like one.
+    const stray = join(root, 'apps', 'notes-i-keep-here')
+    await mkdir(stray, { recursive: true })
+    await writeFile(join(stray, 'readme.txt'), 'mine\n')
+
+    await migrateWorkspace({ legacyRoots: [legacyRoot], root })
+
+    expect(await exists(join(stray, 'AGENTS.md'))).toBe(false)
+    expect(await exists(join(stray, 'memory'))).toBe(false)
   })
 })
 

@@ -4,10 +4,10 @@
  * `SkillsLoader` reads `~/.keylimepi/skills`, and for a long time nothing ever wrote it.
  * The copies under `docs/skills/` were exactly that — copies, with no install step — so
  * on any machine where they had not been placed by hand the agent ran with **no skills
- * at all**. That is worse than it sounds: `working-notes` is the `NOTES.md` convention
- * the post-compaction nudge in `agent/session.ts` explicitly tells the model to go and
- * read, so the one mechanism built to survive a summarized conversation was never taught
- * to the model that needed it.
+ * at all**. That is worse than it sounds: `remember` defines the `memory/` layout the
+ * post-compaction nudge in `agent/session.ts` explicitly sends the model to, so the one
+ * mechanism built to survive a summarized conversation was never taught to the model that
+ * needed it.
  *
  * The content is embedded rather than copied from `docs/` at runtime, following
  * `DEFAULT_GITIGNORE` in `../apps/templates.ts`. A packaged app does not ship the
@@ -203,6 +203,57 @@ change the moment it is written.
 `
   },
   {
+    name: "implement",
+    content: `---
+name: implement
+description: Work through memory/task.md one step at a time, checking each before starting the next. Use after the plan skill, and whenever you are resuming a task you did not finish.
+---
+
+# Work the Plan
+
+Read \`memory/task.md\`. Take the first unticked step. Do only that step.
+
+## The Loop
+
+1. **Read the region you are about to change.** Not the whole file — the part the step
+   names. \`code_intel\` with \`read_symbol\` gets you a function by name.
+2. **Make the edit.**
+3. **Read the compiler errors** that come back attached to the result of your \`write\`,
+   \`edit\` or \`replace_lines\`. They are already there; you do not need to run anything.
+   A step is not done while its file has an error you introduced.
+4. **Do the check the step names.** Writing the code is not the same as it working.
+5. **Tick the step in the same turn you finished it.** A checklist that lags will tell
+   you to redo work you already did.
+6. **Take the next step.**
+
+## When an Edit Will Not Apply
+
+\`edit\` matches text, and it does not forgive leading indentation, internal whitespace
+runs, or blank-line counts. When one fails you are shown the file's real text with line
+numbers beside it.
+
+**Do not retype the \`oldText\` with different indentation.** Use \`replace_lines\` with the
+line numbers you were just shown. That is what those numbers are for, and it cannot fail
+this way at all.
+
+## When You Learn Something
+
+If you found out something that will still be true tomorrow — a constraint, a dead end
+and why it was one, a command that works — write it to a memory note before you forget
+it. Load \`remember\` for the format. Do this *when you find it*, not at the end.
+
+## When the Plan Is Done
+
+1. Move anything from \`## Notes\` in \`task.md\` that is still worth keeping into its own
+   memory note, and add its line to \`memory/INDEX.md\`.
+2. Delete \`memory/task.md\`.
+3. Tell the user what you changed and what you checked.
+
+Do not say a task is done because the code is written. Say it is done because you ran
+the check the step named and it passed.
+`
+  },
+  {
     name: "lookup-docs",
     content: `---
 name: lookup-docs
@@ -339,34 +390,28 @@ expect is worse than the bug it fixed.
 `
   },
   {
-    name: "working-notes",
+    name: "plan",
     content: `---
-name: working-notes
-description: Keep a NOTES.md checklist in the app root for any task of more than a few steps, so the plan survives when the conversation is summarized. Use before starting multi-step work, and after each step.
+name: plan
+description: Write the goal, the ordered steps and how you will check each one into memory/task.md before editing anything. Use at the start of any task that needs more than two or three steps, or that you cannot finish in one turn.
 ---
 
-# Working Notes
+# Plan Before You Edit
 
-Before starting a task of more than a few steps, write the plan to \`NOTES.md\` in
-the app root. Update it as you go.
+A plan you did not write down is a plan that disappears when your conversation is
+summarized. Write it to \`memory/task.md\` first, then work from the file.
 
-## Why This Matters Here
+## Find Out What Is There First
 
-You run on a local model with a small context window. When the conversation
-outgrows it, your earlier messages are replaced by a summary — and a summary is
-lossy in exactly the way that hurts most: it keeps the gist and drops the
-specifics. The file you were halfway through editing, the two things you already
-tried, the step you were on.
+Do not plan against a guess. Before writing a step that touches a file, look at it:
 
-\`NOTES.md\` is on disk. Summarizing the conversation does not touch it. Re-reading
-one short file costs a fraction of what redoing the work costs.
+- \`code_intel\` with \`outline\` on a file tells you its symbols without reading it whole.
+- \`grep\` finds where a name is used.
+- \`read\` the region you are actually going to change.
 
-You will be told when your history has been summarized. Read \`NOTES.md\` then.
+A plan built on what you assumed the code does is a plan you will throw away on step two.
 
-## The Shape
-
-Keep it short — this file is read often, and a long one costs the context it was
-meant to save.
+## The File
 
 \`\`\`markdown
 # Goal
@@ -375,31 +420,117 @@ Add a dark mode toggle to the settings page.
 
 ## Steps
 
-- [x] Read src/pages/Settings.tsx to find where controls are rendered
-- [x] Add a \`theme\` field to the settings store in src/store/settings.ts
-- [ ] Render the toggle — currently editing src/pages/Settings.tsx
-- [ ] Apply the class to the root element in src/App.tsx
+- [ ] Add a \`theme\` field to the settings store — src/store/settings.ts
+      Check: the store's type compiles and the default is 'light'
+- [ ] Render the toggle in the settings panel — src/pages/Settings.tsx
+      Check: the toggle appears and calls the store
+- [ ] Apply the class to the root element — src/App.tsx
+      Check: toggling changes the class on <html>
 
 ## Notes
 
-- Tailwind is configured with \`darkMode: 'class'\`, so the toggle sets a class on
-  \`<html>\`, not a CSS variable.
-- \`src/store/settings.ts\` persists to localStorage already; reuse that.
+- Tailwind is configured with \`darkMode: 'class'\`, so this sets a class, not a variable.
+- \`src/store/settings.ts\` already persists to localStorage; reuse that.
 \`\`\`
 
 ## Rules
 
-1. **Write it before you start**, not after you are lost.
-2. **Tick a step the moment you finish it**, in the same turn. A checklist that
-   lags is worse than none — it will tell you to redo work you already did.
-3. **Record what you learned**, not just what you did. The constraint you
-   discovered three steps ago is the thing a summary will drop.
-4. **Keep it under a screen.** Delete finished sections once the whole task is
-   done.
-5. **Skip it for one-step tasks.** Renaming a variable does not need a file.
+1. **Every step names a file.** A step that does not is not yet a step, it is a wish.
+2. **Every step says how you will check it.** If you cannot say what "done" looks like,
+   you do not understand the step well enough to write it.
+3. **Keep steps small enough to finish in one turn.** A step you cannot finish is a step
+   you cannot tick, and an unticked step you already did is worse than no plan at all.
+4. **Do not plan a one-line change.** Renaming a variable does not need a file.
+5. **Put what you learned in \`## Notes\`,** then move anything still true when the task
+   ends into its own memory note. \`task.md\` is deleted when the task is done; the notes
+   are what stays.
 
-\`NOTES.md\` is committed like any other file, so it is versioned with the work and
-the user can read it to see where you are.
+## Then
+
+Load the \`implement\` skill and work the plan one step at a time.
+`
+  },
+  {
+    name: "remember",
+    content: `---
+name: remember
+description: The memory directory format — the index, one note per subject, and when to write, merge or delete one. Use when recording something worth keeping, when the index gets long, or when you find a NOTES.md in the app root.
+---
+
+# Durable Memory
+
+Your conversation is summarized when it grows too long, and a summary keeps the gist and
+drops the specifics — which is exactly backwards. \`memory/\` is on disk and survives it.
+
+## The Layout
+
+\`\`\`
+memory/
+  INDEX.md        one line per note. The only file you read at the start of a task.
+  task.md         the task in progress. Deleted when it is done.
+  <topic>.md      one durable subject each.
+\`\`\`
+
+\`memory/\` is not committed. That is deliberate: a rollback restores tracked files and
+leaves untracked ones alone, so the note explaining why an approach failed survives the
+rollback that failure caused.
+
+## The Index
+
+\`\`\`markdown
+# Memory Index
+
+- task.md — the task in progress: goal, steps, where I am
+- vite-dev-server.md — why dev needs host:true, and the port collision it fixes
+- api-shape.md — the /api/items response fields, and which are optional
+\`\`\`
+
+One line per file: the name, then **when that note matters**. Write the line the way you
+would write a skill's description — it is the only thing you will see before deciding
+whether to open the file. "notes about the API" tells a later session nothing.
+
+Read \`memory/INDEX.md\` at the start of a task. Open only the notes whose line applies to what
+you are doing now. That is the whole point: fifteen lines, then one file, instead of
+everything.
+
+## What Earns a Note
+
+Something that will still be true next week and that you cannot get back by reading the
+code:
+
+- A constraint you discovered the hard way.
+- An approach that did not work, **and why** — this is the single most valuable kind.
+- A decision and the reason for it.
+- A command or a sequence that works.
+
+## What Does Not
+
+Anything you could re-read from the source. Do not summarize a file into memory — the
+file is already the memory for that, it is more accurate than your summary, and your
+summary will be wrong the moment someone edits it. Write down what the code cannot tell
+you.
+
+## Sizes
+
+- \`memory/INDEX.md\`: **20 lines or fewer.**
+- Each note: **50 lines or fewer.**
+- Flat. No subdirectories — \`grep\` finds what nesting would have organised.
+
+When the index is full, do not append. Merge two related notes into one and fix their
+lines, or delete a note that has stopped being true. Deleting a stale note is a real
+improvement, not a loss: a note that is wrong is worse than no note, because you will
+believe it.
+
+## If You Find a NOTES.md
+
+Older apps kept one file in the app root. Fold it in and delete it:
+
+1. Its goal and remaining steps become \`memory/task.md\`.
+2. Anything under its notes that is still true becomes one note per subject.
+3. Add a line to \`memory/INDEX.md\` for each.
+4. Delete \`NOTES.md\`.
+
+Do this the first time you see one, before starting other work.
 `
   }
 ]
