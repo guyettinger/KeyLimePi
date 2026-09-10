@@ -19,7 +19,8 @@ import {
   applyTemplateVars,
   DEFAULT_AGENTS_MD,
   DEFAULT_GITIGNORE,
-  DEFAULT_MEMORY_INDEX
+  DEFAULT_MEMORY_INDEX,
+  getTemplate
 } from './templates.js'
 
 let root: string
@@ -72,6 +73,33 @@ describe('DEFAULT_MEMORY_INDEX', () => {
     expect(DEFAULT_MEMORY_INDEX).toContain('# Memory Index')
     expect(DEFAULT_MEMORY_INDEX).toContain('<!-- - api-shape.md')
     expect(DEFAULT_MEMORY_INDEX.split('\n').filter((line) => /^- /.test(line))).toEqual([])
+  })
+})
+
+describe('react-vite template', () => {
+  /**
+   * The content of one seeded file.
+   * @param path - The file's path relative to the app root
+   * @returns Its content, or undefined if the template does not seed it
+   */
+  function seeded(path: string): string | undefined {
+    return getTemplate('react-vite').files.find((file) => file.path === path)?.content
+  }
+
+  test('wires Tailwind v4 into the build', () => {
+    // Installing `tailwindcss` does nothing on its own: without the Vite plugin the
+    // stylesheet is served untransformed and every `className` in App.tsx is inert —
+    // no error, just an unstyled page the agent has no reason to suspect.
+    expect(getTemplate('react-vite').devDependencies).toHaveProperty('@tailwindcss/vite')
+    expect(seeded('vite.config.ts')).toContain("import tailwindcss from '@tailwindcss/vite'")
+    expect(seeded('vite.config.ts')).toContain('tailwindcss()')
+  })
+
+  test('uses the v4 stylesheet entry, not the v3 directives', () => {
+    // v4 ignores `@tailwind base|components|utilities`, so the plugin alone still
+    // generates nothing.
+    expect(seeded('src/index.css')).toContain('@import "tailwindcss"')
+    expect(seeded('src/index.css')).not.toContain('@tailwind')
   })
 })
 
