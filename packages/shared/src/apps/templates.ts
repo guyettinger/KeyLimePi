@@ -184,9 +184,7 @@ createRoot(document.getElementById('root')!).render(
       },
       {
         path: 'src/index.css',
-        content: `@tailwind base;
-@tailwind components;
-@tailwind utilities;`
+        content: `@import "tailwindcss";`
       },
       {
         path: 'index.html',
@@ -207,9 +205,10 @@ createRoot(document.getElementById('root')!).render(
         path: 'vite.config.ts',
         content: `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react()]
+  plugins: [react(), tailwindcss()]
 })`
       },
       {
