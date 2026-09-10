@@ -8,8 +8,6 @@ yarn-error.log*
 /.pnp
 .pnp.js
 
-.vscode/*
-/.idea/
 /apps/electron/node_modules/
 /apps/electron/out/
 /packages/shared/dist/
@@ -19,6 +17,10 @@ yarn-error.log*
 
 # macOS
 .DS_Store
+
+# ide
+.idea/*
+.vscode/*
 
 # Claude Code (local, not shared)
 CLAUDE.local.md
