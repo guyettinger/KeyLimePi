@@ -73,23 +73,25 @@ import {
 } from '@keylimepi/shared'
 import type { AgentStatus, ContextReport, DaemonHealth, TelemetrySnapshot, PermissionMode, StreamChunk, SkillDraft, SkillLibrary, SkillLibraryUpdate, SkillScope, CreateAppParams, SubApp, AppLogEntry, AppStatusChange, RunningApp, PersistedMessage, ChatHistoryPayload, ChatSession, CreateChatSessionParams, SerializedContentBlock, ElementContext, AnySourceConfig, McpSourceConfig, OpenAppsState } from '@keylimepi/core'
 import {
-  DEFAULT_OLLAMA_BASE_URL,
-  isOllamaReachable,
-  listOllamaModels,
-  readDaemonHealth,
-  prepareModelForSession,
-  syncOllamaModels,
-  type OllamaModel
-} from './agent/ollama'
+   DEFAULT_OLLAMA_BASE_URL,
+   isOllamaReachable,
+   listOllamaModels,
+   readDaemonHealth,
+   prepareModelForSession,
+   syncOllamaModels,
+   type OllamaModel
+ } from './agent/ollama'
 import { summarizeSessionTitle } from './agent/session-title'
 import {
-  deriveContextBudget,
-  MAX_CONTEXT_WINDOW,
-  MIN_CONTEXT_WINDOW,
-  type ContextBudget
-} from './agent/context-budget'
+   deriveContextBudget,
+   MAX_CONTEXT_WINDOW,
+   MIN_CONTEXT_WINDOW,
+   type ContextBudget
+ } from './agent/context-budget'
 import { captureElement, type ElementInfo } from './screenshot'
 import { openExternalUrl } from './external-links'
+import { assertImageBlock } from './image-attachment'
+import type { ImageContent } from '@earendil-works/pi-ai'
 
 /** Directory of this module, for resolving bundled assets under ESM. */
 const moduleDir = dirname(fileURLToPath(import.meta.url))
@@ -1078,36 +1080,43 @@ async function optionalWorkspace(appId: unknown): Promise<Workspace | null> {
 
 
 /**
- * Split a renderer prompt into plain text and attached element contexts.
+ * Split a renderer prompt into plain text, attached element contexts, and user images.
  *
  * `tool` and `approval` blocks are display-only records of an earlier turn; Pi keeps
  * that history itself, so they are not resent.
  *
  * @param prompt - The prompt as the renderer sent it
- * @returns The message text and any attached element contexts
+ * @returns The message text, any element contexts, and any user-attached images
  */
 function splitPrompt(prompt: string | SerializedContentBlock[]): {
-  /** The user's message text. */
+     /** The user's message text. */
   text: string
-  /** Element contexts attached to the message. */
+     /** Element contexts attached to the message. */
   elements: ElementContext[]
-} {
-  if (typeof prompt === 'string') {
-    return { text: prompt, elements: [] }
-  }
+     /** Images the user attached, in the shape the model receives. */
+  images: ImageContent[]
+ } {
+   if (typeof prompt === 'string') {
+    return { text: prompt, elements: [], images: [] }
+    }
 
   const textParts: string[] = []
   const elements: ElementContext[] = []
+  const images: ImageContent[] = []
 
   for (const block of prompt) {
     if (block.type === 'text') {
       textParts.push(block.content)
-    } else if (block.type === 'element') {
+      } else if (block.type === 'element') {
       elements.push(block.elementContext)
-    }
-  }
+      } else if (block.type === 'image') {
+       // Already base64 with no `data:` prefix, so it is the `ImageContent` shape
+       // `session.prompt` sends the model as-is.
+      images.push({ type: 'image', data: block.data, mimeType: block.mimeType })
+      }
+   }
 
-  return { text: textParts.join('\n'), elements }
+  return { text: textParts.join('\n'), elements, images }
 }
 
 /**
@@ -1467,7 +1476,12 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
         // an unbounded screenshot becomes an unbounded image attachment.
         if (block.type === 'element') {
           assertElementContext((block as { elementContext?: unknown }).elementContext)
-        }
+          }
+        // An image block's bytes are the one large payload in a prompt, and an untrusted
+        // renderer could send an unbounded one, so it is bounded before it is ever read.
+        if (block.type === 'image') {
+          assertImageBlock(block)
+           }
       }
     } else {
       throw new Error('Invalid prompt: must be string or content blocks')
@@ -1534,13 +1548,13 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
       onStream({ type: 'status', status: { kind: 'settled' } })
 
       const host = await ensureAgentHost(mainWindow, workspace)
-      const { text, elements } = splitPrompt(prompt)
+    const { text, elements, images } = splitPrompt(prompt)
 
       if (text.length > MAX_PROMPT_CHARS) {
         throw new Error('Prompt too long')
       }
 
-      await host.sendPrompt({ text: await withSkillDirectives(text, workspace), elements })
+      await host.sendPrompt({ text: await withSkillDirectives(text, workspace), elements, images })
     } catch (error) {
       // Stop pressed while the turn was still queued. Nothing ran and nothing
       // failed, so the turn ends quietly — reporting an error here would put a

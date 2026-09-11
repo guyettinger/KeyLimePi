@@ -96,13 +96,31 @@ export interface SerializedElementBlock {
 }
 
 /**
+ * A user-attached image, in a content block.
+ *
+ * Unlike an element context, whose screenshot is one field the inspector also
+ * describes, this is an image the user attached on its own — a picked file, a paste,
+ * or a drop — with no surrounding DOM. It is the same shape the model receives: a
+ * base64 payload plus its MIME type, so the block is what the context report prices
+ * and the trimmer caps, and what a reloaded session renders.
+ */
+export interface SerializedImageBlock {
+  type: 'image'
+   /** Base64 image bytes, with no `data:` URL prefix. */
+  data: string
+   /** MIME type of the image, for example `image/png`. */
+  mimeType: string
+}
+
+/**
  * Union of all serializable content block types.
  */
 export type SerializedContentBlock =
-  | SerializedTextBlock
-  | SerializedToolBlock
-  | SerializedApprovalBlock
-  | SerializedElementBlock
+   | SerializedTextBlock
+   | SerializedToolBlock
+   | SerializedApprovalBlock
+   | SerializedElementBlock
+   | SerializedImageBlock
 
 /**
  * A persisted chat message.

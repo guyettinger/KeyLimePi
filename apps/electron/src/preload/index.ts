@@ -530,11 +530,21 @@ interface SerializedElementBlock {
   elementContext: ElementContext
 }
 
+/** A user-attached image block, base64 without a `data:` URL prefix. */
+interface SerializedImageBlock {
+  type: 'image'
+     /** Base64 image bytes, with no `data:` URL prefix. */
+  data: string
+     /** MIME type of the image, for example `image/png`. */
+  mimeType: string
+}
+
 type SerializedContentBlock =
-  | SerializedTextBlock
-  | SerializedToolBlock
-  | SerializedApprovalBlock
-  | SerializedElementBlock
+    | SerializedTextBlock
+    | SerializedToolBlock
+    | SerializedApprovalBlock
+    | SerializedElementBlock
+    | SerializedImageBlock
 
 /** A persisted chat message. */
 interface PersistedMessage {
