@@ -31,6 +31,7 @@ import { createTelemetry, type Telemetry } from './agent/telemetry'
 import { readWorkspaceLayout, writeWorkspaceLayout } from './layout-store'
 import { readOpenApps, writeOpenApps } from './open-apps-store'
 import { serialized } from './serialize'
+import { createHandlerRegistry } from './ipc-registry'
 import { InferenceCancelled, inferenceQueue } from './inference-queue'
 import {
   allRuntimes,
@@ -1406,12 +1407,21 @@ async function ensureAgentHost(
 }
 
 /**
+ * Every invoke handler `setupIpcHandlers` registers, so `cleanupIpcHandlers` can
+ * remove them all without naming each channel a second time. See `ipc-registry.ts`.
+ */
+const handlers = createHandlerRegistry<Parameters<typeof ipcMain.handle>[1]>(ipcMain)
+
+/** Register an invoke handler that `cleanupIpcHandlers` will remove. */
+const handle = handlers.handle
+
+/**
  * Set up all IPC handlers for the main window.
  * @param mainWindow - The main BrowserWindow instance
  */
 export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   // Get current permission mode
-  ipcMain.handle('permissions:get-mode', async (_, appId: unknown): Promise<PermissionMode> => {
+  handle('permissions:get-mode', async (_, appId: unknown): Promise<PermissionMode> => {
     // No app named means the Settings page with none open. There is no workspace to
     // report on, and the prompting default is the honest answer rather than another
     // app's mode.
@@ -1420,7 +1430,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // Set permission mode
-  ipcMain.handle(
+  handle(
     'permissions:set-mode',
     async (_, mode: unknown, appId: unknown): Promise<PermissionMode> => {
       if (
@@ -1442,7 +1452,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   )
 
   // Start a fresh agent session, discarding the current transcript
-  ipcMain.handle('agent:clear-history', async (_, appId: unknown): Promise<void> => {
+  handle('agent:clear-history', async (_, appId: unknown): Promise<void> => {
     const runtime = await withWorkspace(appId, (workspace) => workspace.runtime)
     await disposeAgentHost(runtime)
     forgetCachedReport(runtime)
@@ -1450,7 +1460,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // Send message to agent
-  ipcMain.handle('agent:message', async (_, prompt: string | SerializedContentBlock[], appId: unknown): Promise<void> => {
+  handle('agent:message', async (_, prompt: string | SerializedContentBlock[], appId: unknown): Promise<void> => {
     // Validate input. The renderer is untrusted.
     if (typeof prompt === 'string') {
       if (prompt.length === 0) {
@@ -1576,7 +1586,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // Cancel the in-flight agent run
-  ipcMain.handle('agent:abort', async (_, appId: unknown): Promise<void> => {
+  handle('agent:abort', async (_, appId: unknown): Promise<void> => {
     // Order matters: deny first, so the `tool_call` handler awaiting approval
     // unblocks and Pi's loop can observe the abort. Aborting alone would not reach
     // it — see denyPendingApprovals.
@@ -1594,7 +1604,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // What the context window holds, attributed to blocks the user can act on
-  ipcMain.handle('agent:get-context-report', async (_, appId: unknown): Promise<ContextReport | null> => {
+  handle('agent:get-context-report', async (_, appId: unknown): Promise<ContextReport | null> => {
     if (appId === null || appId === undefined) return null
     const { app, runtime } = await withWorkspace(appId, (workspace) => workspace)
 
@@ -1658,12 +1668,12 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   //
   // No arguments, so there is nothing to validate. `snapshot()` copies its records and
   // its totals, so what crosses the bridge is already detached from the live recorder.
-  ipcMain.handle('agent:get-telemetry', async (_, appId: unknown): Promise<TelemetrySnapshot> => {
+  handle('agent:get-telemetry', async (_, appId: unknown): Promise<TelemetrySnapshot> => {
     return withWorkspace(appId, ({ runtime }) => runtime.telemetry.snapshot())
   })
 
   // Summarize the conversation now rather than at the threshold
-  ipcMain.handle('agent:compact', async (_, appId: unknown): Promise<void> => {
+  handle('agent:compact', async (_, appId: unknown): Promise<void> => {
     const runtime = await withWorkspace(appId, (workspace) => workspace.runtime)
     if (!runtime.host) throw new Error('No conversation to compact yet.')
     refuseWhileRunning(runtime, 'summarizing')
@@ -1694,15 +1704,15 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   // falling back to "whichever app is active" — harmless while only one could be
   // open, and with several mounted it is a rollback aimed at the app you were
   // looking at a moment ago. `withWorkspace` refuses rather than guesses.
-  ipcMain.handle('version:get-state', async (_, appId: unknown) =>
+  handle('version:get-state', async (_, appId: unknown) =>
     withWorkspace(appId, ({ root }) => new VersionManager(root).getState())
   )
 
-  ipcMain.handle('version:get-branches', async (_, appId: unknown) =>
+  handle('version:get-branches', async (_, appId: unknown) =>
     withWorkspace(appId, ({ root }) => new VersionManager(root).listBranches())
   )
 
-  ipcMain.handle('version:get-history', async (_, depth: unknown, appId: unknown) =>
+  handle('version:get-history', async (_, depth: unknown, appId: unknown) =>
     withWorkspace(appId, ({ root }) =>
       new VersionManager(root).getHistory({
         depth: typeof depth === 'number' && Number.isInteger(depth) && depth > 0 ? depth : undefined
@@ -1710,7 +1720,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     )
   )
 
-  ipcMain.handle('version:switch-branch', async (_, name: unknown, appId: unknown) => {
+  handle('version:switch-branch', async (_, name: unknown, appId: unknown) => {
     if (typeof name !== 'string' || name.length === 0) {
       throw new Error('Invalid branch name')
     }
@@ -1720,14 +1730,14 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     })
   })
 
-  ipcMain.handle('version:create-branch', async (_, name: unknown, appId: unknown) => {
+  handle('version:create-branch', async (_, name: unknown, appId: unknown) => {
     if (typeof name !== 'string' || name.length === 0) {
       throw new Error('Invalid branch name')
     }
     return withWorkspace(appId, ({ root }) => new VersionManager(root).createBranch({ name }))
   })
 
-  ipcMain.handle('version:rollback', async (_, oid: unknown, appId: unknown) => {
+  handle('version:rollback', async (_, oid: unknown, appId: unknown) => {
     if (typeof oid !== 'string' || oid.length === 0) {
       throw new Error('Invalid commit OID')
     }
@@ -1737,7 +1747,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     })
   })
 
-  ipcMain.handle('version:diff', async (_, from: unknown, to: unknown, appId: unknown) => {
+  handle('version:diff', async (_, from: unknown, to: unknown, appId: unknown) => {
     if (typeof from !== 'string' || typeof to !== 'string') {
       throw new Error('Invalid commit OIDs')
     }
@@ -1752,7 +1762,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
    * to spell wrong. Recording is idempotent and first-write-wins, so calling this on
    * every strip refresh cannot walk the baseline forward.
    */
-  ipcMain.handle('changes:session-baseline', async (_, appId: unknown, sessionId: unknown) => {
+  handle('changes:session-baseline', async (_, appId: unknown, sessionId: unknown) => {
     if (typeof appId !== 'string' || !isValidAppId(appId)) {
       throw new Error('Invalid app ID')
     }
@@ -1767,11 +1777,11 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
    * Confinement comes from `files.ts`, which uses the same `isWithinRoot` the agent's
    * gate uses — so the tree can never show a file the agent could not reach.
    */
-  ipcMain.handle('files:tree', async (_, appId: unknown) => {
+  handle('files:tree', async (_, appId: unknown) => {
     return withWorkspace(appId, ({ root }) => listAppFiles(root))
   })
 
-  ipcMain.handle('files:read', async (_, filePath: unknown, appId: unknown) => {
+  handle('files:read', async (_, filePath: unknown, appId: unknown) => {
     // The renderer is untrusted. Length is bounded here as well as type, so a path built
     // by a runaway loop cannot be handed to the filesystem.
     if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4096) {
@@ -1787,7 +1797,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
    * from the registry rather than started separately — so the human and the model are
    * never shown two different accounts of whether the code compiles.
    */
-  ipcMain.handle('files:diagnostics', async (_, filePath: unknown, appId: unknown) => {
+  handle('files:diagnostics', async (_, filePath: unknown, appId: unknown) => {
     if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4096) {
       throw new Error('Invalid file path')
     }
@@ -1808,18 +1818,18 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // App management IPC handlers
-  ipcMain.handle('apps:list', async () => {
+  handle('apps:list', async () => {
     return appManager.listApps()
   })
 
-  ipcMain.handle('apps:get', async (_, id: string) => {
+  handle('apps:get', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
     return appManager.getApp(id)
   })
 
-  ipcMain.handle('apps:create', async (_, params: CreateAppParams) => {
+  handle('apps:create', async (_, params: CreateAppParams) => {
     if (!params || typeof params.name !== 'string' || params.name.length === 0) {
       throw new Error('Invalid app name')
     }
@@ -1829,7 +1839,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return appManager.createApp(params)
   })
 
-  ipcMain.handle('apps:delete', async (_, id: string) => {
+  handle('apps:delete', async (_, id: string) => {
     // `isValidAppId`, not just a non-empty string: this id reaches `getAppPath` through
     // `listSessions` below, and `deleteApp` turns it into the path of a recursive `rm`.
     if (typeof id !== 'string' || !isValidAppId(id)) {
@@ -1859,7 +1869,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return appManager.deleteApp(id)
   })
 
-  ipcMain.handle('apps:update', async (_, id: string, updates: { name?: string; description?: string }) => {
+  handle('apps:update', async (_, id: string, updates: { name?: string; description?: string }) => {
     if (typeof id !== 'string' || !isValidAppId(id)) {
       throw new Error('Invalid app ID')
     }
@@ -1887,7 +1897,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   // several mounted, bootstrapping only the focused one leaves the others with no
   // session, and re-bootstrapping on every focus change would re-push a transcript
   // the panel already has. `workspace:open` does that job, once per workspace.
-  ipcMain.handle('apps:set-active', async (_, id: string | null) => {
+  handle('apps:set-active', async (_, id: string | null) => {
     if (id === null) {
       setFocusedAppId(null)
       return null
@@ -1911,7 +1921,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
    * session the manifest already names and only creates one when there is none —
    * so a remount replays the same answer rather than starting a new conversation.
    */
-  ipcMain.handle('workspace:open', async (_, appId: unknown) => {
+  handle('workspace:open', async (_, appId: unknown) => {
     return withWorkspace(appId, async ({ app, runtime }) => {
       // Load manifest (triggers migration if needed)
       const manifest = await chatHistoryManager.loadManifest(app.id)
@@ -1937,24 +1947,24 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     })
   })
 
-  ipcMain.handle('apps:get-active', async () => {
+  handle('apps:get-active', async () => {
     return getFocusedAppId()
   })
 
-  ipcMain.handle('apps:get-active-details', async () => {
+  handle('apps:get-active-details', async () => {
     return getActiveApp()
   })
 
   // Sources IPC handlers
-  ipcMain.handle('sources:list', async () => {
+  handle('sources:list', async () => {
     return sourceManager.getConnectedSources()
   })
 
-  ipcMain.handle('sources:load-configs', async () => {
+  handle('sources:load-configs', async () => {
     return sourceManager.loadSources()
   })
 
-  ipcMain.handle('sources:save', async (_, config: unknown) => {
+  handle('sources:save', async (_, config: unknown) => {
     const validated = validateMcpSourceConfig(config)
     await sourceManager.saveSource(validated)
     // The saved command and args become both a spawned process and an agent tool
@@ -1962,7 +1972,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     await disposeAllAgentHosts()
   })
 
-  ipcMain.handle('sources:connect', async (_, id: string) => {
+  handle('sources:connect', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid source ID')
     }
@@ -1977,7 +1987,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return connected
   })
 
-  ipcMain.handle('sources:disconnect', async (_, id: string) => {
+  handle('sources:disconnect', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid source ID')
     }
@@ -1985,7 +1995,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     await disposeAllAgentHosts()
   })
 
-  ipcMain.handle('sources:delete', async (_, id: string) => {
+  handle('sources:delete', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid source ID')
     }
@@ -1999,11 +2009,11 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   // workspace down rather than re-deriving it inside each helper is what stops
   // `loaderForScope` and `commitAppSkill`, both of which turn a scope into a
   // directory that gets written, from being pointed by a global.
-  ipcMain.handle('skills:list', async (_, appId: unknown): Promise<SkillLibrary> => {
+  handle('skills:list', async (_, appId: unknown): Promise<SkillLibrary> => {
     return loadSkillLibrary(await optionalWorkspace(appId))
   })
 
-  ipcMain.handle(
+  handle(
     'skills:save',
     async (_, request: unknown, appId: unknown): Promise<SkillLibraryUpdate> => {
       const workspace = await optionalWorkspace(appId)
@@ -2015,7 +2025,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     'skills:delete',
     async (_, request: unknown, appId: unknown): Promise<SkillLibraryUpdate> => {
       const workspace = await optionalWorkspace(appId)
@@ -2027,7 +2037,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     'skills:set-enabled',
     async (_, request: unknown, appId: unknown): Promise<SkillLibrary> => {
     if (typeof request !== 'object' || request === null) {
@@ -2057,7 +2067,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   )
 
   // Workspace layout IPC handlers
-  ipcMain.handle('layout:get', async (_, appId: unknown, version: unknown) => {
+  handle('layout:get', async (_, appId: unknown, version: unknown) => {
     if (typeof appId !== 'string' || !isValidAppId(appId)) {
       throw new Error('Invalid app ID')
     }
@@ -2067,7 +2077,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return readWorkspaceLayout({ storePath: layoutPath, appId, version })
   })
 
-  ipcMain.handle(
+  handle(
     'layout:save',
     async (_, appId: unknown, version: unknown, layout: unknown) => {
       if (typeof appId !== 'string' || !isValidAppId(appId)) {
@@ -2100,11 +2110,11 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
   }
 
-  ipcMain.handle('workspaces:get-open', async (): Promise<OpenAppsState> => {
+  handle('workspaces:get-open', async (): Promise<OpenAppsState> => {
     return readOpenApps({ storePath: openAppsPath, liveAppIds: await liveAppIds() })
   })
 
-  ipcMain.handle('workspaces:set-open', async (_, state: unknown) => {
+  handle('workspaces:set-open', async (_, state: unknown) => {
     if (typeof state !== 'object' || state === null) {
       throw new Error('Invalid open apps state')
     }
@@ -2134,11 +2144,11 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // Config IPC handlers
-  ipcMain.handle('config:get', async () => {
+  handle('config:get', async () => {
     return loadConfig()
   })
 
-  ipcMain.handle('config:save', async (_, config: AppConfig) => {
+  handle('config:save', async (_, config: AppConfig) => {
     if (!config || typeof config !== 'object') {
       throw new Error('Invalid config')
     }
@@ -2222,7 +2232,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
    * timeout as every other discovery call. It exists outside Settings because that is
    * the one place a person is *not* looking when a turn fails to start.
    */
-  ipcMain.handle('daemon:health', async (): Promise<DaemonHealth> => {
+  handle('daemon:health', async (): Promise<DaemonHealth> => {
     const config = getConfig()
     return readDaemonHealth({ baseUrl: config.ollamaBaseUrl, modelId: config.ollamaModel })
   })
@@ -2230,7 +2240,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   /**
    * List the models pulled into the local Ollama daemon, refreshing Pi's catalog.
    */
-  ipcMain.handle('models:list', async (): Promise<OllamaModel[]> => {
+  handle('models:list', async (): Promise<OllamaModel[]> => {
     const config = getConfig()
     return syncOllamaModels({
       agentDir: piAgentDir,
@@ -2243,7 +2253,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   /**
    * Report whether the configured Ollama daemon is answering.
    */
-  ipcMain.handle('models:check-connection', async (_, baseUrl?: string): Promise<boolean> => {
+  handle('models:check-connection', async (_, baseUrl?: string): Promise<boolean> => {
     if (baseUrl !== undefined && (typeof baseUrl !== 'string' || baseUrl.length > 2048)) {
       throw new Error('Invalid Ollama base URL')
     }
@@ -2251,7 +2261,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // Chat history IPC handlers (session-aware)
-  ipcMain.handle('chat:load-history', async (_, appId: unknown): Promise<ChatHistoryPayload> => {
+  handle('chat:load-history', async (_, appId: unknown): Promise<ChatHistoryPayload> => {
     const runtime = await withWorkspace(appId, (workspace) => workspace.runtime)
     if (!runtime.activeSessionId) return { sessionId: null, messages: [] }
     return {
@@ -2260,7 +2270,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     }
   })
 
-  ipcMain.handle('chat:clear-history', async (_, appId: unknown) => {
+  handle('chat:clear-history', async (_, appId: unknown) => {
     const { app, runtime } = await withWorkspace(appId, (workspace) => workspace)
     if (!runtime.activeSessionId) {
       throw new Error('No active session')
@@ -2272,11 +2282,11 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   })
 
   // Chat session IPC handlers
-  ipcMain.handle('sessions:list', async (_, appId: unknown) => {
+  handle('sessions:list', async (_, appId: unknown) => {
     return withWorkspace(appId, ({ app }) => chatHistoryManager.listSessions(app.id))
   })
 
-  ipcMain.handle('sessions:create', async (_, params: CreateChatSessionParams | undefined, appId: unknown) => {
+  handle('sessions:create', async (_, params: CreateChatSessionParams | undefined, appId: unknown) => {
     const { app, runtime } = await withWorkspace(appId, (workspace) => workspace)
 
     if (params !== undefined && params !== null) {
@@ -2301,7 +2311,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return session
   })
 
-  ipcMain.handle('sessions:delete', async (_, sessionId: string, appId: unknown) => {
+  handle('sessions:delete', async (_, sessionId: string, appId: unknown) => {
     const { app, runtime } = await withWorkspace(appId, (workspace) => workspace)
     assertSessionId(sessionId)
 
@@ -2325,7 +2335,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     await broadcastSessions(mainWindow, app.id)
   })
 
-  ipcMain.handle('sessions:rename', async (_, sessionId: string, title: string, appId: unknown) => {
+  handle('sessions:rename', async (_, sessionId: string, title: string, appId: unknown) => {
     const { app } = await withWorkspace(appId, (workspace) => workspace)
     assertSessionId(sessionId)
     // Bounded for length as well as type, like the session id beside it. The title
@@ -2338,7 +2348,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return renamed
   })
 
-  ipcMain.handle('sessions:set-active', async (_, sessionId: string, appId: unknown) => {
+  handle('sessions:set-active', async (_, sessionId: string, appId: unknown) => {
     const { app, runtime } = await withWorkspace(appId, (workspace) => workspace)
     assertSessionId(sessionId)
 
@@ -2388,7 +2398,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     sendSessionChanged(mainWindow, app.id, sessionId, history)
   })
 
-  ipcMain.handle('sessions:get-active', async (_, appId: unknown) => {
+  handle('sessions:get-active', async (_, appId: unknown) => {
     return withWorkspace(appId, ({ runtime }) => runtime.activeSessionId)
   })
 
@@ -2403,7 +2413,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     mainWindow.webContents.send('apps:status-change', change)
   })
 
-  ipcMain.handle('apps:run', async (_, id: string) => {
+  handle('apps:run', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
@@ -2420,34 +2430,34 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
     return appRunner.start(id, app.path, app.template)
   })
 
-  ipcMain.handle('apps:stop', async (_, id: string) => {
+  handle('apps:stop', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
     return appRunner.stop(id)
   })
 
-  ipcMain.handle('apps:get-running', async () => {
+  handle('apps:get-running', async () => {
     const running = appRunner.getRunning()
     // Convert Map to array for IPC serialization
     return Array.from(running.entries()).map(([id, info]) => ({ id, ...info }))
   })
 
-  ipcMain.handle('apps:is-running', async (_, id: string) => {
+  handle('apps:is-running', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
     return appRunner.isRunning(id)
   })
 
-  ipcMain.handle('apps:get-running-info', async (_, id: string) => {
+  handle('apps:get-running-info', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
     return appRunner.getRunningApp(id)
   })
 
-  ipcMain.handle('apps:open-browser', async (_, id: string) => {
+  handle('apps:open-browser', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
@@ -2462,11 +2472,11 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
 
   // Links in the chat transcript are written by the model, so the URL arriving
   // here is untrusted. `openExternalUrl` validates it before the OS sees it.
-  ipcMain.handle('shell:open-external', async (_, url: unknown) => {
+  handle('shell:open-external', async (_, url: unknown) => {
     await openExternalUrl(url)
   })
 
-  ipcMain.handle('apps:install-deps', async (_, id: string) => {
+  handle('apps:install-deps', async (_, id: string) => {
     if (typeof id !== 'string' || id.length === 0) {
       throw new Error('Invalid app ID')
     }
@@ -2506,7 +2516,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   /**
    * Load the inspector overlay script as a string.
    */
-  ipcMain.handle('inspector:get-script', async () => {
+  handle('inspector:get-script', async () => {
     try {
       // Read the compiled inspector script
       const scriptPath = join(moduleDir, '../../packages/shared/dist/inspector/overlay.js')
@@ -2521,7 +2531,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   /**
    * Capture element screenshot.
    */
-  ipcMain.handle(
+  handle(
     'inspector:capture-element',
     async (event, elementInfo: ElementInfo) => {
       try {
@@ -2540,7 +2550,7 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
   /**
    * Add element context to the current chat.
    */
-  ipcMain.handle('chat:add-element-context', async (event, context: ElementContext) => {
+  handle('chat:add-element-context', async (event, context: ElementContext) => {
     // The renderer is untrusted even though main produced this a moment ago through
     // `chat:capture-element` — nothing carries it between the two calls but the
     // renderer itself.
@@ -2559,96 +2569,12 @@ export function setupIpcHandlers(mainWindow: BrowserWindow): void {
  * Clean up IPC handlers when the window is destroyed.
  */
 export function cleanupIpcHandlers(): void {
-  ipcMain.removeHandler('permissions:get-mode')
-  ipcMain.removeHandler('permissions:set-mode')
-  ipcMain.removeHandler('agent:clear-history')
-  ipcMain.removeHandler('agent:message')
-  ipcMain.removeHandler('daemon:health')
-  ipcMain.removeHandler('agent:abort')
-  ipcMain.removeHandler('agent:get-context-report')
-  ipcMain.removeHandler('agent:get-telemetry')
-  ipcMain.removeHandler('agent:compact')
-  ipcMain.removeHandler('models:list')
-  ipcMain.removeHandler('models:check-connection')
+  handlers.removeAll()
   ipcMain.removeAllListeners('agent:tool-response')
-  
-  // Version control handlers
-  ipcMain.removeHandler('version:get-state')
-  ipcMain.removeHandler('version:get-branches')
-  ipcMain.removeHandler('version:get-history')
-  ipcMain.removeHandler('version:switch-branch')
-  ipcMain.removeHandler('version:create-branch')
-  ipcMain.removeHandler('version:rollback')
-  ipcMain.removeHandler('version:diff')
-  ipcMain.removeHandler('files:tree')
-  ipcMain.removeHandler('files:read')
-  ipcMain.removeHandler('files:diagnostics')
-
-  // App management handlers
-  ipcMain.removeHandler('apps:list')
-  ipcMain.removeHandler('apps:get')
-  ipcMain.removeHandler('apps:create')
-  ipcMain.removeHandler('apps:delete')
-  ipcMain.removeHandler('apps:update')
-  ipcMain.removeHandler('apps:set-active')
-  ipcMain.removeHandler('workspace:open')
-  ipcMain.removeHandler('apps:get-active')
-  ipcMain.removeHandler('apps:get-active-details')
-
-  // App runner handlers
-  ipcMain.removeHandler('apps:run')
-  ipcMain.removeHandler('apps:stop')
-  ipcMain.removeHandler('apps:get-running')
-  ipcMain.removeHandler('apps:is-running')
-  ipcMain.removeHandler('apps:get-running-info')
-  ipcMain.removeHandler('apps:open-browser')
-  ipcMain.removeHandler('shell:open-external')
-  ipcMain.removeHandler('apps:install-deps')
 
   // Stop all running apps on cleanup
   appRunner.stopAll().catch(() => {})
   appRunner.removeAllListeners()
-
-  // Sources handlers
-  ipcMain.removeHandler('sources:list')
-  ipcMain.removeHandler('sources:load-configs')
-  ipcMain.removeHandler('sources:save')
-  ipcMain.removeHandler('sources:connect')
-  ipcMain.removeHandler('sources:disconnect')
-  ipcMain.removeHandler('sources:delete')
-
-  // Skills handlers
-  ipcMain.removeHandler('skills:list')
-  ipcMain.removeHandler('skills:save')
-  ipcMain.removeHandler('skills:delete')
-  ipcMain.removeHandler('skills:set-enabled')
-
-  // Workspace layout handlers
-  ipcMain.removeHandler('layout:get')
-  ipcMain.removeHandler('layout:save')
-  ipcMain.removeHandler('workspaces:get-open')
-  ipcMain.removeHandler('workspaces:set-open')
-
-  // Config handlers
-  ipcMain.removeHandler('config:get')
-  ipcMain.removeHandler('config:save')
-
-  // Chat history handlers
-  ipcMain.removeHandler('chat:load-history')
-  ipcMain.removeHandler('chat:clear-history')
-
-  // Session handlers
-  ipcMain.removeHandler('sessions:list')
-  ipcMain.removeHandler('sessions:create')
-  ipcMain.removeHandler('sessions:delete')
-  ipcMain.removeHandler('sessions:rename')
-  ipcMain.removeHandler('sessions:set-active')
-  ipcMain.removeHandler('sessions:get-active')
-
-  // Inspector handlers
-  ipcMain.removeHandler('inspector:get-script')
-  ipcMain.removeHandler('inspector:capture-element')
-  ipcMain.removeHandler('chat:add-element-context')
 
   // Tear down every agent session.
   //
