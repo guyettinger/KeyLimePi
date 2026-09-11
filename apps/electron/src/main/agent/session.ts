@@ -75,7 +75,7 @@ import { createWebTools, WEB_TOOL_NAMES } from './web-tools'
 import { createSkillTools, SKILL_TOOL_NAMES } from './skill-tools'
 import { loadSessionSkills } from './skills'
 import { elementContextToPrompt } from '../agent-utils'
-
+import type { ImageContent } from '@earendil-works/pi-ai'
 /**
  * The tools every session starts with: Pi's built-ins plus Key Lime Pi's version and
  * network tools.
@@ -312,10 +312,17 @@ export interface AgentHost {
  * Parameters for {@link AgentHost.sendPrompt}.
  */
 export interface SendPromptParams {
-  /** The user's message text. */
+    /** The user's message text. */
   text: string
-  /** Selected UI elements to attach as context. */
+    /** Selected UI elements to attach as context. */
   elements?: ElementContext[]
+    /**
+     * Images the user attached on their own — a picked, pasted, or dropped file —
+     * separate from the element screenshots `elements` carries. Both reach the model
+     * as `ImageContent[]`, so both are priced and trimmed the same when the prompt is
+     * built.
+     */
+  images?: ImageContent[]
 }
 
 /**
@@ -1007,10 +1014,17 @@ export async function createAgentHost(params: CreateAgentHostParams): Promise<Ag
     sessionId: session.sessionId,
     appId: app.id,
 
-    sendPrompt: async ({ text, elements }: SendPromptParams) => {
-      const { prompt, images } = elementContextToPrompt({ text, elements: elements ?? [] })
-      await session.prompt(prompt, images.length > 0 ? { images } : undefined)
-    },
+    sendPrompt: async ({ text, elements, images }: SendPromptParams) => {
+          // Both are screenshots the model sees: the element ones come from the inspector,
+          // the user ones from an attached file, paste, or drop. Both are already base64
+          // with no `data:` prefix, so concatenation is all that is needed.
+        const { prompt, images: elementImages } = elementContextToPrompt({
+          text,
+          elements: elements ?? []
+        })
+        const allImages = images === undefined ? elementImages : elementImages.concat(images)
+        await session.prompt(prompt, allImages.length > 0 ? { images: allImages } : undefined)
+        },
 
     abort: async () => {
       await session.abort()

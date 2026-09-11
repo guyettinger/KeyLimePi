@@ -140,16 +140,20 @@ interface PiMessage {
  * A Pi content block.
  */
 interface PiContentBlock {
-  /** Block kind. */
+     /** Block kind. */
   type: string
-  /** Text payload, for `text` and `thinking` blocks. */
+     /** Text payload, for `text` and `thinking` blocks. */
   text?: string
-  /** Tool call identifier, for `toolCall` blocks. */
+     /** Tool call identifier, for `toolCall` blocks. */
   id?: string
-  /** Tool name, for `toolCall` blocks. */
+     /** Tool name, for `toolCall` blocks. */
   name?: string
-  /** Tool arguments, for `toolCall` blocks. */
+     /** Tool arguments, for `toolCall` blocks. */
   arguments?: Record<string, unknown>
+     /** Base64 image payload, for `image` blocks a user attached; no `data:` prefix. */
+  data?: string
+     /** MIME type of an `image` block, for example `image/png`. */
+  mimeType?: string
 }
 
 /**
@@ -578,6 +582,11 @@ function toPersistedMessages(entries: PiMessageEntry[]): PersistedMessage[] {
           }
           blocks.push(toolBlock)
           if (block.id) pendingTools.set(block.id, toolBlock)
+         } else if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
+          // A user-attached image. It is the one content block that carries bytes, and it
+          // must survive a reload the way text and tool blocks do, or a reopened session
+          // would drop the picture a user sent alongside their text.
+        blocks.push({ type: 'image', data: block.data, mimeType: block.mimeType })
         }
         // `thinking` blocks are internal reasoning and are not surfaced.
       }

@@ -55,6 +55,151 @@ import type {
 const WRITING_TOOLS = new Set(['write', 'edit', 'replace_lines', 'refactor'])
 
 /**
+ * An image the user attached to a message, staged in the composer.
+ *
+ * Its bytes are already base64 by the time they arrive here, so the field that
+ * travels over IPC is the same one `assertImageBlock` accepts in main and the same
+ * one `ImageBlock` renders. An image that is too large is downscaled before it gets
+ * here, so what the bubble shows and what the model receives are the same bytes.
+ */
+interface ImageAttachment {
+   /** Stable key, for removing a staged attachment. */
+  id: string
+   /** Base64 image bytes, with no `data:` URL prefix. */
+  data: string
+   /** MIME type of the image, for example `image/png`. */
+  mimeType: string
+   /** The file's name, for the thumbnail label. */
+  name: string
+}
+
+/**
+ * Read image files into staged attachments, in order.
+ *
+ * A read that fails rejects the promise, so the caller never turns a bad file into
+ * an empty image; the error is surfaced as a failed send the way any error is. An
+ * image larger than the caps is downscaled — see {@link stageImage} — before its
+ * bytes are taken, so the attachment always fits.
+ */
+
+/**
+ * The longest edge, in pixels, an attached image may have, and the ceiling its
+ * base64 payload may reach before it is forced smaller.
+ *
+ * A picked, pasted, or dropped image is the only part of a message with no resize
+ * step, so without a cap a full-resolution screenshot or a high-MP photo would push
+ * a multi-megabyte payload into the transcript and the model's window. The
+ * inspector's element screenshot already arrives small — it is resized before it is
+ * sent — so only a user image is downscaled, and here it happens. The byte ceiling
+ * mirrors main's `MAX_IMAGE_DATA_BYTES`: the base64 string bounded there is the same
+ * string measured here as `payload.length`, and a renderer cap stricter than main's
+ * can never let an oversized image through — the only direction that is dangerous.
+ */
+const MAX_IMAGE_EDGE = 2048
+const MAX_ATTACHED_IMAGE_BYTES = 8 * 1024 * 1024
+
+/**
+ * Read an image and keep its bytes as-is.
+ *
+ * `readAsDataURL` yields `data:image/png;base64,XXXX`; the bytes are the part after
+ * that prefix, which is the shape `ImageBlock` and main's validator expect.
+ */
+function originalAttachment(url: string, file: File): ImageAttachment {
+  return {
+   id: nanoid(),
+   data: url.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, ''),
+   mimeType: file.type || 'image/png',
+   name: file.name || 'image'
+    }
+}
+
+/**
+ * Read a file, downscaling it to `MAX_IMAGE_EDGE` on its long edge when it is too
+ * large to keep.
+ *
+ * A small image passes through byte-for-byte, so nothing below the caps pays for a
+ * re-encode. One that does not fit — or whose re-encode still exceeds the byte
+ * ceiling — is drawn to a canvas and re-encoded smaller until it is under
+ * `MAX_ATTACHED_IMAGE_BYTES`, halving the scale each pass. JPEG and WebP inputs keep
+ * their type and shrink by quality; everything else becomes PNG. The MIME that
+ * comes back is one the canvas actually produced, so the bytes `MessageBubble`
+ * renders are the same ones the model receives.
+ *
+ * @param file - The image to stage
+ * @returns A promise resolving to the one staged attachment
+ */
+function stageImage(file: File): Promise<ImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error)
+    reader.onload = () => {
+      const url = typeof reader.result === 'string' ? reader.result : ''
+      if (!url) { reject(new Error('Could not read image')); return }
+      const img = new Image()
+      img.onerror = () => reject(new Error('Could not decode image'))
+      img.onload = () => {
+        const w = img.naturalWidth
+        const h = img.naturalHeight
+        const original = url.split(',')[1] ?? ''
+          // A zero-dimension image decodes to nothing to scale; and one that already
+          // fits both caps needs no re-encode, so it stays byte-identical.
+        if (
+          w === 0 ||
+          h === 0 ||
+          (w <= MAX_IMAGE_EDGE && h <= MAX_IMAGE_EDGE && original.length <= MAX_ATTACHED_IMAGE_BYTES)
+        ) {
+          resolve(originalAttachment(url, file))
+          return
+          }
+        const outType =
+          file.type === 'image/jpeg' || file.type === 'image/webp'
+             ? file.type
+             : 'image/png'
+        const quality = outType === 'image/jpeg' || outType === 'image/webp' ? 0.85 : undefined
+        let fit = Math.min(1, MAX_IMAGE_EDGE / w, MAX_IMAGE_EDGE / h)
+        for (let attempt = 0; ; attempt += 1) {
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(1, Math.round(w * fit))
+          canvas.height = Math.max(1, Math.round(h * fit))
+          const ctx = canvas.getContext('2d')
+          if (!ctx) { reject(new Error('No 2D canvas context')); return }
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+          let encoded: string
+          try {
+            encoded = quality === undefined ? canvas.toDataURL(outType) : canvas.toDataURL(outType, quality)
+          } catch {
+            encoded = canvas.toDataURL()
+            }
+          const [meta, payload = ''] = encoded.split(',')
+            // Six halvings reach a 32×32 image, far under the ceiling, so past that a
+            // re-encode is pointless — return the smallest made rather than a blank.
+          if (payload.length <= MAX_ATTACHED_IMAGE_BYTES || attempt >= 6) {
+            resolve({
+              id: nanoid(),
+              data: payload,
+              mimeType: meta.slice('data:'.length).split(';')[0] || 'image/png',
+              name: file.name || 'image'
+              })
+            return
+            }
+          fit *= 0.5
+          }
+         }
+      img.src = url
+      }
+        reader.readAsDataURL(file)
+        })
+}
+
+function readImageFiles(files: FileList | File[]): Promise<ImageAttachment[]> {
+  const list: File[] = Array.isArray(files) ? [...files] : Array.from(files)
+  return Promise.all(
+    list
+    .filter((file) => file.type.startsWith('image/'))
+    .map((file) => stageImage(file))
+     )
+}
+/**
  * Props for the Chat component.
  */
 interface ChatProps {
@@ -118,7 +263,13 @@ function convertToUIBlocks(blocks: SerializedContentBlock[]): ContentBlock[] {
         content: '',
         elementContext: block.elementContext
       }
-    }
+     } else if (block.type === 'image') {
+      return {
+        type: 'image',
+        data: block.data,
+        mimeType: block.mimeType
+       }
+     }
     // Fallback for unknown types
     return { type: 'text', content: '' }
   })
@@ -154,7 +305,13 @@ function convertToSerializedBlocks(blocks: ContentBlock[]): SerializedContentBlo
         type: 'element',
         elementContext: block.elementContext!
       }
-    }
+      } else if (block.type === 'image') {
+      return {
+        type: 'image',
+        data: block.data,
+        mimeType: block.mimeType
+        }
+      }
     // Fallback for unknown types
     return { type: 'text', content: '' }
   })
@@ -228,6 +385,8 @@ export function Chat({
 }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+        // Images the user has staged to attach, read from files, paste, or drops.
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([])
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null)
   const [model, setModel] = useState('')
 
@@ -279,7 +438,6 @@ export function Chat({
   } = useContextReport(app.id, activeSessionId, turnRevision)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  
   // Track current tool being used for input data
   const currentToolRef = useRef<{ name: string; input?: Record<string, unknown> } | null>(null)
   
@@ -561,41 +719,56 @@ export function Chat({
   }, [app.id])
 
   const sendMessage = useCallback(async () => {
-    if (!input.trim() || isStreaming || !activeSessionId) return
+    if ((!input.trim() && attachments.length === 0) || isStreaming || !activeSessionId) return
+
+    const blocks: ContentBlock[] = []
+         // The text rides as its own block only when there is some, so an image-only
+        // message does not lead with an empty text block the model would see as noise.
+    if (input.trim()) blocks.push({ type: 'text' as const, content: input })
+     for (const attachment of attachments) {
+      blocks.push({
+        type: 'image' as const,
+        data: attachment.data,
+        mimeType: attachment.mimeType
+         })
+       }
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       content: input,
-      blocks: [{ type: 'text' as const, content: input }]
-    }
+      blocks
+      }
 
     const assistantMessage: Message = {
       id: (Date.now() + 1).toString(),
       role: 'assistant',
-      blocks: []  // Use blocks instead of content for new messages
-    }
+      blocks: []   // Use blocks instead of content for new messages
+       }
 
     setMessages(prev => [...prev, userMessage, assistantMessage])
     setInput('')
+         // The bytes are already in `userMessage.blocks`, so clearing the staged list
+        // now cannot drop what is about to be sent.
+    setAttachments([])
     beginTurn(app.id)
 
-    // Convert message blocks to serialized format for agent
+     // Convert message blocks to serialized format for agent
     const serializedBlocks = convertToSerializedBlocks(userMessage.blocks || [])
 
-    // The turn is open from `beginTurn` until a `complete` chunk closes it, and a
-    // rejected invoke produces no chunks at all. `agent:message` validates the prompt
-    // *before* the try block whose catch emits the compensating error and completion,
-    // so a rejection here is the one failure nothing downstream reports — it would
-    // leave the composer disabled behind a turn that never started. This is also the
-    // only handler for the rejection: `sendMessage` is passed straight to `onClick`.
+     // The turn is open from `beginTurn` until a `complete` chunk closes it, and a
+     // rejected invoke produces no chunks at all. `agent:message` validates the prompt
+     // *before* the try block whose catch emits the compensating error and completion,
+     // so a rejection here is the one failure nothing downstream reports — it would
+     // leave the composer disabled behind a turn that never started. This is also the
+     // only handler for the rejection: `sendMessage` is passed straight to `onClick`.
     try {
       await window.electronAPI.sendMessage(serializedBlocks, app.id)
-    } catch (caught) {
+       } catch (caught) {
       endTurn(app.id, null)
       setMessages((prev) => withFailure(prev, readableError(caught)))
-    }
-  }, [app.id, input, isStreaming, setInput, activeSessionId])
+       }
+   }, [app.id, input, isStreaming, setInput, setAttachments, activeSessionId, attachments])
 
   /**
    * Cancel the in-flight agent run.
@@ -612,6 +785,24 @@ export function Chat({
       endTurn(app.id, null)
     }
   }, [])
+
+   /**
+    * Add images picked, pasted, or dropped to the composer.
+    */
+  const addImageFiles = useCallback((files: FileList | File[]) => {
+    void readImageFiles(files)
+      .then((read) => {
+        if (read.length > 0) setAttachments((prev) => [...prev, ...read])
+        })
+      .catch((error) => console.error('Failed to read image:', error))
+       }, [setAttachments])
+
+   /**
+    * Remove a staged attachment from the composer.
+    */
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
+    }, [setAttachments])
 
   const handleApproval = useCallback((approved: boolean) => {
     if (!pendingApproval) return
@@ -716,19 +907,51 @@ export function Chat({
           onOpenPanel={onOpenPanel}
         />
 
-        <div className="mx-auto max-w-3xl">
+        <div
+          className="mx-auto max-w-3xl"
+           // Images may arrive by paste, the file picker, or a drop anywhere on the
+           // composer. `preventDefault` on `dragover` is what lets a drop fire.
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+           e.preventDefault()
+            addImageFiles(e.dataTransfer.files)
+            }}
+        >
           <SkillMentionMenu
             skills={mentionableSkills}
             query={mentionQuery}
             activeIndex={mentionIndex}
             onPick={pickMention}
           />
+             {/* Staged attachments, shown above the input until the message is sent. */}
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+               {attachments.map((attachment) => (
+                 <div key={attachment.id} className="relative">
+                   <img
+                    src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                    alt={attachment.name}
+                    className="h-20 w-20 rounded-lg border border-line object-cover"
+                    />
+                   <button
+                    type="button"
+                    onClick={() => removeAttachment(attachment.id)}
+                    className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rust text-xs font-bold text-ground"
+                    aria-label={`Remove ${attachment.name}`}
+                    >
+                    ✕
+                    </button>
+                   </div>
+                 ))}
+              </div>
+            )}
           <div className="flex gap-2">
             <input
               ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={(e) => addImageFiles(e.clipboardData.files)}
               onKeyDown={(e) => {
                 // While the menu is up the arrows and Enter belong to it, or Enter
                 // would send a message with a half-typed skill name in it.
@@ -772,7 +995,7 @@ export function Chat({
             ) : (
               <button
                 onClick={sendMessage}
-                disabled={!input.trim() || !activeSessionId}
+                disabled={(!input.trim() && attachments.length === 0) || !activeSessionId}
                 className="h-11 shrink-0 rounded-lg bg-keylime px-5 font-medium text-ground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Send

@@ -352,6 +352,50 @@ const COMMANDS = {
     console.log('asked:', message, '— a local model turn takes 40-90s; poll with `text`')
   },
 
+  /**
+   * Attach an image to the composer, driving the real pipeline the user uses. The
+   * attach button (and its hidden file input) are gone in favour of paste and drop,
+   * so a test builds a `File` in the renderer and dispatches the `drop` event the user
+   * gesture would: it runs the composer's `onDrop`, which calls `addImageFiles` and
+   * base64-encodes the image into an attachment. A pasted image needs a real clipboard
+   * image, but a synthesised drop needs no OS and no hidden input.
+   */
+  async upload(imgPath, ...more) {
+    need()
+    const paths = [imgPath, ...more].filter(Boolean)
+   if (paths.length === 0) return console.log('ERROR: upload <path> [path2 ...]')
+    // The renderer has no filesystem access (contextIsolation), so the bytes travel in
+    // and the File is built where the drop handler reaches it.
+    const byExt = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
+    const files = paths.map((p) => {
+     const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase()
+      return {
+       name: p.slice(p.lastIndexOf('/') + 1),
+       mime: byExt[ext] || 'image/png',
+       b64: fs.readFileSync(p).toString('base64'),
+      }
+     })
+    const res = await page.evaluate((payload) => {
+     const input = document.querySelector('input[placeholder^="Ask the agent"]')
+      if (!input) return 'ERROR: composer not found (is an app open?)'
+       const dt = new DataTransfer()
+       for (const { name, mime, b64 } of payload) {
+        const bin = atob(b64)
+         const bytes = new Uint8Array(bin.length)
+         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+          dt.items.add(new File([bytes], name, { type: mime }))
+         }
+       // A drag needs an over before its drop; dispatch both on the composer.
+       input.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+       input.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        return `dropped ${payload.length} into ${input.getAttribute('placeholder')}`
+       }, files)
+    if (res.startsWith('ERROR')) return console.log(res)
+     // The FileReader resolves async; give the thumbnail a beat to render.
+    await new Promise((r) => setTimeout(r, 1200))
+    console.log(res, '->', ...paths)
+    },
+
   async approve() {
     need()
     await COMMANDS['click-text']('Allow')

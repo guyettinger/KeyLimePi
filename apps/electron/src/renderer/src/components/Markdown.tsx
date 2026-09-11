@@ -122,9 +122,13 @@ export const Markdown = memo(function Markdown({ content, isStreaming = false }:
         </a>
       ),
 
-      // The renderer CSP declares no `img-src`, so it inherits `default-src
-      // 'self'` and every remote or data: image is blocked. Rather than show a
-      // broken frame, name the image and offer its URL as a link.
+      // The renderer CSP allows `img-src 'self' data:` (so the user's own
+      // attachments and the inspector's element screenshots render) but not
+      // remote URLs, and this override is what keeps a model-authored image out
+      // of the DOM: it is never emitted as an `<img>`, so it can't beacon to a
+       // a server or fetch a remote resource. Links are the exfil surface, and
+       // those are handled at the `a` override, where each click is validated by
+       // the main process before the OS sees the URL.
       img: ({ src, alt }) => (
         <span className="my-2 flex flex-wrap items-baseline gap-1.5 text-[12px] text-ash">
           <span className="eyebrow">Image</span>

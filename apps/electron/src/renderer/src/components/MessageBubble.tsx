@@ -61,9 +61,20 @@ interface ElementBlock {
 }
 
 /**
+ * A user-attached image block within a message.
+ */
+interface ImageBlock {
+  type: 'image'
+      /** Base64 image bytes, with no `data:` URL prefix. */
+  data: string
+      /** MIME type of the image, for example `image/png`. */
+  mimeType: string
+}
+
+/**
  * Content block types for rich messages.
  */
-export type ContentBlock = ToolBlock | TextBlock | ThinkingBlock | ApprovalBlock | ElementBlock
+export type ContentBlock = ToolBlock | TextBlock | ThinkingBlock | ApprovalBlock | ElementBlock | ImageBlock
 
 /**
  * Legacy tool status indicator (for backward compatibility).
@@ -158,7 +169,16 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
             case 'element':
               return block.elementContext ? (
                 <ElementContextBubble key={i} context={block.elementContext} />
-              ) : null
+               ) : null
+            case 'image':
+              return (
+                 <img
+                  key={i}
+                  src={`data:${block.mimeType};base64,${block.data}`}
+                  alt="Attached image"
+                  className="max-h-48 max-w-full rounded-lg border border-line object-contain"
+                 />
+               )
             default:
               return null
           }

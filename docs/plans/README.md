@@ -52,6 +52,7 @@ The implementation is split into **6 independent sessions**, each resulting in a
 | 28. Multiple Workspaces | Concurrency + shell | Open-app rail at 64px, Skills into the dock and Settings, five Settings tabs; per-app workspace runtimes in main, one visible turn queue, every workspace mounted at once | Complete | [Notes](SESSION-28-NOTES.md) |
 | 29. Key Lime Pi | Rename | `Pi Taster` → `Key Lime Pi`, `pitaster` → `keylimepi`; workspace migration becomes a chain across both renames; two carry-over defects from the last rename fixed | Complete | [Notes](SESSION-29-NOTES.md) |
 | [30. Starter Skills and Memory](SESSION-30-STARTER-SKILLS-AND-MEMORY.md) | How a sub-app starts out | `plan`/`implement`/`remember` seeded, a per-app `AGENTS.md`, an indexed gitignored `memory/` replacing `NOTES.md`, backfilled into existing apps | Complete | [Notes](SESSION-30-NOTES.md) |
+| 31. Image Attachments | An image on a message reaches the vision model | Composer attach via pick, paste, or drop; base64 end to end with a byte-sized bound on the renderer's untrusted input, delivered to Ollama and persisted to the transcript | Complete | [Notes](SESSION-31-NOTES.md) |
 
 ## Session 6 Sub-Sessions
 
